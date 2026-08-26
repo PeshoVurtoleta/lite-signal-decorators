@@ -1,0 +1,16 @@
+{
+  "ts": {
+    "fixture.src.js": "2b5e30f75a664faee14090722fa489d760f9b388b28bc00ada1cdc5b887e2f54",
+    "instrument.js": "aeb8ab990745040552d09c46b4612e36c608e39ae68462f7dfc80a08ed86ed16"
+  },
+  "babel": {
+    "fixture.src.js": "e1f60f783c33841bcf902a7c51bf8ad994f608795e1669125d3fff65b8990fc7",
+    "instrument.js": "240d90109892fb4354ca029b26ffdc87aeef2a15b1c9ca3b78666b89f83a740b"
+  },
+  "tsLegacy": {
+    "legacy.src.js": "bdd721a6f9a39d7eabe055f124956c50a32249afec73ec21842d5fd23cd178f7"
+  },
+  "babelLegacy": {
+    "legacy.src.js": "bff7752dea067aba559b1a9c83cf38788d83a895834df31d959877af98d6cd40"
+  }
+}
