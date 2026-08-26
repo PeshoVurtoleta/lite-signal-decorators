@@ -6,7 +6,7 @@
 // src/ depth and the out-dir depth (../../../SignalDecorators.js). ASCII-only.
 
 import * as pkgNs from "../../../SignalDecorators.js";
-import { reactive, derived, reactiveHost } from "../../../SignalDecorators.js";
+import { reactive, derived, reactiveHost, reactiveEffect, batched } from "../../../SignalDecorators.js";
 
 /** The package instance that built these classes (shares its PLANS WeakMap). */
 export const pkg = pkgNs;
@@ -14,6 +14,10 @@ export const pkg = pkgNs;
 /** Recompute counters -- the derived bodies bump these so laziness/equals
  * suppression are observable in the behavior suite. */
 export const recompute = { double: 0, band: 0, da: 0, db: 0 };
+
+/** Effect-fire counters -- the @reactiveEffect bodies bump these so wire-fire,
+ * re-fire, and dispose-stop are observable in the behavior suite. */
+export const effectFires = { counter: 0, derived: 0 };
 
 /** Tolerance equals: values within 0.5 are treated as unchanged. */
 function approxEquals(a: number, b: number): boolean {
@@ -39,6 +43,19 @@ export class Counter {
         return this.level;
     }
 
+    // @reactiveEffect method: tracks count, fires once at wire, re-fires on a
+    // count mutation.
+    @reactiveEffect onCount() {
+        effectFires.counter++;
+        void this.count;
+    }
+
+    // @batched method: coalesces its two writes into one effect flush.
+    @batched bump() {
+        this.count = this.count + 1;
+        this.count = this.count + 1;
+    }
+
     // Plain field reading an earlier accessor (L2 declaration-order read).
     late = this.count + 1;
 }
@@ -60,6 +77,13 @@ export class Derived extends Base {
     @derived get db() {
         recompute.db++;
         return this.a + this.b;
+    }
+
+    // @reactiveEffect over an inherited-key derived: fires once after the full
+    // chain is wired.
+    @reactiveEffect onDb() {
+        effectFires.derived++;
+        void this.db;
     }
 }
 

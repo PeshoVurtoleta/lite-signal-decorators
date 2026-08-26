@@ -42,12 +42,15 @@ var __propKey = (this && this.__propKey) || function (x) {
     return typeof x === "symbol" ? x : "".concat(x);
 };
 import * as pkgNs from "../../../SignalDecorators.js";
-import { reactive, derived, reactiveHost } from "../../../SignalDecorators.js";
+import { reactive, derived, reactiveHost, reactiveEffect, batched } from "../../../SignalDecorators.js";
 /** The package instance that built these classes (shares its PLANS WeakMap). */
 export const pkg = pkgNs;
 /** Recompute counters -- the derived bodies bump these so laziness/equals
  * suppression are observable in the behavior suite. */
 export const recompute = { double: 0, band: 0, da: 0, db: 0 };
+/** Effect-fire counters -- the @reactiveEffect bodies bump these so wire-fire,
+ * re-fire, and dispose-stop are observable in the behavior suite. */
+export const effectFires = { counter: 0, derived: 0 };
 /** Tolerance equals: values within 0.5 are treated as unchanged. */
 function approxEquals(a, b) {
     return Math.abs(a - b) < 0.5;
@@ -72,17 +75,23 @@ let Counter = (() => {
     let _member_extraInitializers = [];
     let _get_double_decorators;
     let _get_band_decorators;
+    let _onCount_decorators;
+    let _bump_decorators;
     var Counter = class {
         static { _classThis = this; }
         static {
             const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(null) : void 0;
             _get_double_decorators = [derived];
             _get_band_decorators = [derived({ equals: approxEquals })];
+            _onCount_decorators = [reactiveEffect];
+            _bump_decorators = [batched];
             __esDecorate(this, null, _count_decorators, { kind: "accessor", name: "count", static: false, private: false, access: { has: obj => "count" in obj, get: obj => obj.count, set: (obj, value) => { obj.count = value; } }, metadata: _metadata }, _count_initializers, _count_extraInitializers);
             __esDecorate(this, null, _level_decorators, { kind: "accessor", name: "level", static: false, private: false, access: { has: obj => "level" in obj, get: obj => obj.level, set: (obj, value) => { obj.level = value; } }, metadata: _metadata }, _level_initializers, _level_extraInitializers);
             __esDecorate(this, null, _member_decorators, { kind: "accessor", name: _a, static: false, private: false, access: { has: obj => _a in obj, get: obj => obj[_a], set: (obj, value) => { obj[_a] = value; } }, metadata: _metadata }, _member_initializers, _member_extraInitializers);
             __esDecorate(this, null, _get_double_decorators, { kind: "getter", name: "double", static: false, private: false, access: { has: obj => "double" in obj, get: obj => obj.double }, metadata: _metadata }, null, _instanceExtraInitializers);
             __esDecorate(this, null, _get_band_decorators, { kind: "getter", name: "band", static: false, private: false, access: { has: obj => "band" in obj, get: obj => obj.band }, metadata: _metadata }, null, _instanceExtraInitializers);
+            __esDecorate(this, null, _onCount_decorators, { kind: "method", name: "onCount", static: false, private: false, access: { has: obj => "onCount" in obj, get: obj => obj.onCount }, metadata: _metadata }, null, _instanceExtraInitializers);
+            __esDecorate(this, null, _bump_decorators, { kind: "method", name: "bump", static: false, private: false, access: { has: obj => "bump" in obj, get: obj => obj.bump }, metadata: _metadata }, null, _instanceExtraInitializers);
             __esDecorate(null, _classDescriptor = { value: _classThis }, _classDecorators, { kind: "class", name: _classThis.name, metadata: _metadata }, null, _classExtraInitializers);
             Counter = _classThis = _classDescriptor.value;
             if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
@@ -104,6 +113,17 @@ let Counter = (() => {
         get band() {
             recompute.band++;
             return this.level;
+        }
+        // @reactiveEffect method: tracks count, fires once at wire, re-fires on a
+        // count mutation.
+        onCount() {
+            effectFires.counter++;
+            void this.count;
+        }
+        // @batched method: coalesces its two writes into one effect flush.
+        bump() {
+            this.count = this.count + 1;
+            this.count = this.count + 1;
         }
         // Plain field reading an earlier accessor (L2 declaration-order read).
         late = (__runInitializers(this, _member_extraInitializers), this.count + 1);
@@ -159,14 +179,17 @@ let Derived = (() => {
     let _b_initializers = [];
     let _b_extraInitializers = [];
     let _get_db_decorators;
+    let _onDb_decorators;
     var Derived = class extends _classSuper {
         static { _classThis = this; }
         static {
             const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : void 0;
             _b_decorators = [reactive];
             _get_db_decorators = [derived];
+            _onDb_decorators = [reactiveEffect];
             __esDecorate(this, null, _b_decorators, { kind: "accessor", name: "b", static: false, private: false, access: { has: obj => "b" in obj, get: obj => obj.b, set: (obj, value) => { obj.b = value; } }, metadata: _metadata }, _b_initializers, _b_extraInitializers);
             __esDecorate(this, null, _get_db_decorators, { kind: "getter", name: "db", static: false, private: false, access: { has: obj => "db" in obj, get: obj => obj.db }, metadata: _metadata }, null, _instanceExtraInitializers);
+            __esDecorate(this, null, _onDb_decorators, { kind: "method", name: "onDb", static: false, private: false, access: { has: obj => "onDb" in obj, get: obj => obj.onDb }, metadata: _metadata }, null, _instanceExtraInitializers);
             __esDecorate(null, _classDescriptor = { value: _classThis }, _classDecorators, { kind: "class", name: _classThis.name, metadata: _metadata }, null, _classExtraInitializers);
             Derived = _classThis = _classDescriptor.value;
             if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
@@ -178,6 +201,12 @@ let Derived = (() => {
         get db() {
             recompute.db++;
             return this.a + this.b;
+        }
+        // @reactiveEffect over an inherited-key derived: fires once after the full
+        // chain is wired.
+        onDb() {
+            effectFires.derived++;
+            void this.db;
         }
         constructor() {
             super(...arguments);

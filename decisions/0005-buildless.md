@@ -64,6 +64,26 @@ poison, capacity accounting -- everything the decorator path has.
 - The demo (S5b) and any buildless consumer use `defineReactive`; the README
   quick-start leads with it so the first code a reader runs needs no transpiler.
 
+## Effects-map finalization (added 0.2.0-preview.1, S2a)
+
+The S0 sketch above showed `effects` as an ARRAY of bodies. S2a finalizes it to
+a MAP `{ key: fn | { run, scheduler } }`, matching `signals`/`deriveds`.
+Rationale: decorated effects always carry a name (the method key), and the
+decorator twin installs the guarded public method under that key; a buildless
+effect must expose the same callable member for full parity. Diagnostics
+(missing-host, duplicate-key, the plan `byKey` index) and the planned S4 labels
+also need a stable name per effect. An array has none. So:
+
+```
+defineReactive(Class, {
+  effects: { onCount: (self) => { void self.count; }, tick: { run, scheduler } },
+})
+```
+
+Each effect key installs a leak-guarded public method on `Class.prototype`
+(identical to the decorator path), and the auto-effect wraps the `run` body.
+`effects` is MAP-ONLY -- an array (or any non-object) is a named throw.
+
 ## Evidence
 
 `spikes/buildless.mjs` (parity + shared-function-identity table above).

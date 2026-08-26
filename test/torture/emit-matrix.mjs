@@ -8,10 +8,17 @@
 //      testing stale bytes. (The hashing mirrors test/fixtures/regen.mjs; we do
 //      NOT import regen -- it runs tsc/babel at module load.)
 //   2. behavioral L-law consequences on BOTH the TS and the Babel emit:
+//        L1  member decorators apply in SOURCE order WITH METHODS PRESENT, and
+//            the class decorator applies LAST: the @reactiveEffect method
+//            (declared mid-class) is claimed + wired (fires exactly once at
+//            construction) and the @batched method is installed and callable at
+//            its source position -- had reactiveHost applied before the member
+//            decorators, neither would be in the plan;
 //        L2  a field initializer reads an earlier accessor's live box
 //            (`late === count + 1`);
 //        L4  constructing Derived allocates exactly ONE anchor -- node delta is
-//            its merged P+D+1 (5), never doubled for the base chain;
+//            its merged P+D+E+1 (6, with the onDb effect), never doubled for the
+//            base chain;
 //        L6  a dynamic import of the matching LEGACY out-dir rejects with the
 //            named legacy-decorator error;
 //        L8  the wrapper preserves `instanceof` the original class and its
@@ -86,7 +93,7 @@ const EMITS = [
     { label: "babel", ns: babelNs, legacy: "../fixtures/babel-legacy-out/legacy.src.js" },
 ];
 
-const LAWS_PER_EMIT = 4;
+const LAWS_PER_EMIT = 5;
 const EXPECTED_LAWS = EMITS.length * LAWS_PER_EMIT;
 let lawsRun = 0;
 
@@ -97,6 +104,23 @@ for (const emit of EMITS) {
 
     const ns = emit.ns;
     const pkg = ns.pkg;
+
+    // L1 -- member decorators (INCLUDING methods) apply in source order; the
+    // class decorator applies last. The @reactiveEffect method fires exactly
+    // once at wiring and the @batched method is installed + callable.
+    {
+        const before = ns.effectFires.counter;
+        const c = new ns.Counter();
+        const fired = ns.effectFires.counter - before;
+        check(fired === 1, () => emit.label + " L1: onCount wire-fire=" + fired + " expected 1");
+        check(typeof c.onCount === "function", () => emit.label + " L1: effect public method onCount not installed");
+        check(typeof c.bump === "function", () => emit.label + " L1: batched method bump not installed");
+        const c0 = c.count;
+        c.bump();                              // batched: count += 1 twice, coalesced
+        check(c.count === c0 + 2, () => emit.label + " L1: bump advanced count to " + c.count + " expected " + (c0 + 2));
+        pkg.disposeReactive(c);
+        lawsRun++;
+    }
 
     // L2 -- declaration-order field read sees an earlier accessor's live box.
     {
@@ -109,14 +133,15 @@ for (const emit of EMITS) {
         lawsRun++;
     }
 
-    // L4 -- a decorated subclass wires ONE anchor: Derived is P=2,D=2 -> delta 5.
+    // L4 -- a decorated subclass wires ONE anchor: Derived is P=2,D=2,E=1 (onDb)
+    // -> delta 6.
     {
         const before = stats().activeNodes;
         const d = new ns.Derived();
         const delta = stats().activeNodes - before;
         check(
-            delta === 5,
-            () => emit.label + " L4: Derived node delta=" + delta + " expected 5 (single anchor)",
+            delta === 6,
+            () => emit.label + " L4: Derived node delta=" + delta + " expected 6 (single anchor)",
         );
         pkg.disposeReactive(d);
         lawsRun++;

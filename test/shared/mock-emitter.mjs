@@ -17,6 +17,7 @@
 // Public API (kept small + stable; Workstream C torture scenarios import this):
 //   makeAccessorContext(name, opts?)  -- a standard accessor-decorator context.
 //   makeGetterContext(name, opts?)    -- a standard getter-decorator context.
+//   makeMethodContext(name, opts?)    -- a standard method-decorator context.
 //   makeClassContext(name, opts?)     -- a standard class-decorator context.
 //   buildClass(spec)                  -- assemble one class from a member spec,
 //                                        applying decorators via the protocol
@@ -66,6 +67,22 @@ export function makeGetterContext(name, opts) {
 }
 
 /**
+ * A standard method-decorator context. `opts` overrides { static, private,
+ * addInitializer } for rejection-matrix probes.
+ */
+export function makeMethodContext(name, opts) {
+    const o = opts || {};
+    return {
+        kind: "method",
+        name,
+        static: o.static === true,
+        private: o.private === true,
+        access: { has() {}, get() {} },
+        addInitializer: o.addInitializer || NOOP,
+    };
+}
+
+/**
  * A standard class-decorator context.
  */
 export function makeClassContext(name, opts) {
@@ -88,6 +105,7 @@ export function makeClassContext(name, opts) {
 // Member (in source order):
 //   { kind: "accessor", key, decorator, value?: (this) => v }
 //   { kind: "getter",   key, decorator, body: function () {...} }
+//   { kind: "method",   key, decorator, body: function () {...} }
 //   { kind: "field",    key, value: (this) => v }   // plain field, no decorator
 //
 // `decorator` is a fully-formed decorator (bare fn or a factory's result), so a
@@ -154,6 +172,22 @@ export function buildClass(spec) {
                 configurable: true,
             });
             // Getters have no per-instance field init.
+        } else if (m.kind === "method") {
+            const ctx = makeMethodContext(m.key, {
+                addInitializer(fn) { addInits.push(fn); },
+            });
+            // Standard method decorator: called with (originalMethod, context);
+            // its return value replaces the method (installed as desc.value). The
+            // package returns the guarded public form here; the auto-effect keeps
+            // the original internally. Methods are non-enumerable own props.
+            const res = m.decorator(m.body, ctx);
+            Object.defineProperty(proto, m.key, {
+                value: res,
+                writable: true,
+                enumerable: false,
+                configurable: true,
+            });
+            // Methods have no per-instance field init.
         } else if (m.kind === "field") {
             const valueThunk = m.value;
             const key = m.key;
@@ -179,11 +213,12 @@ export function buildClass(spec) {
 // test/fixtures/src/fixture.src.ts compiles. 02/03 run the behavior suite over
 // the compiled emits; 01 runs it over THIS build. Any divergence is a bug.
 //
-// Node-count deltas at construction (P signals + D deriveds + 1 anchor):
-//   Counter -> P=3 (count, level, SYM), D=2 (double, band) => 6
-//   Base    -> P=1 (a),                 D=1 (da)            => 3
-//   Derived -> P=2 (a, b),              D=2 (da, db)        => 5
-//   Leaf    -> Base's plan (undecorated subclass)           => 3
+// Node-count deltas at construction (P signals + D deriveds + E effects + 1
+// anchor; @batched members wire no node):
+//   Counter -> P=3 (count, level, SYM), D=2 (double, band), E=1 (onCount) => 7
+//   Base    -> P=1 (a),                 D=1 (da),           E=0           => 3
+//   Derived -> P=2 (a, b),              D=2 (da, db),       E=1 (onDb)    => 6
+//   Leaf    -> Base's plan (undecorated subclass)                        => 3
 
 /** Tolerance equals: treats values within 0.5 as unchanged (suppresses set). */
 export function approxEquals(a, b) {
@@ -191,15 +226,18 @@ export function approxEquals(a, b) {
 }
 
 /**
- * Build the S1 class family through the real package `pkg`. Returns
- * `{ Counter, Base, Derived, Leaf, SYM, recompute, pkg }` -- the exact shape the
- * behavior suite consumes.
+ * Build the S1/S2a class family through the real package `pkg`. Returns
+ * `{ Counter, Base, Derived, Leaf, SYM, recompute, effectFires, pkg }` -- the
+ * exact shape the behavior suite consumes.
  */
 export function makeClasses(pkg) {
     const SYM = Symbol("counter-sym");
     // Recompute counters -- the derived bodies bump these so the behavior suite
     // can assert laziness and equals-suppression as OBSERVABLES.
     const recompute = { double: 0, band: 0, da: 0, db: 0 };
+    // Effect-fire counters -- the @reactiveEffect bodies bump these so the suite
+    // can assert wire-fire=1, mutate re-fire, and dispose-stop as OBSERVABLES.
+    const effectFires = { counter: 0, derived: 0 };
 
     const Counter = buildClass({
         name: "Counter",
@@ -224,6 +262,25 @@ export function makeClasses(pkg) {
                 key: "band",
                 decorator: pkg.derived({ equals: approxEquals }),
                 body: function () { recompute.band++; return this.level; },
+            },
+            // @reactiveEffect method: tracks count, fires once at wire, re-fires
+            // on a count mutation (E=1 node).
+            {
+                kind: "method",
+                key: "onCount",
+                decorator: pkg.reactiveEffect,
+                body: function () { effectFires.counter++; void this.count; },
+            },
+            // @batched method: coalesces its two writes into one effect flush
+            // (wires no node).
+            {
+                kind: "method",
+                key: "bump",
+                decorator: pkg.batched,
+                body: function () {
+                    this.count = this.count + 1;
+                    this.count = this.count + 1;
+                },
             },
             // Plain field reading an earlier accessor (L2 declaration-order read).
             { kind: "field", key: "late", value: function () { return this.count + 1; } },
@@ -256,6 +313,14 @@ export function makeClasses(pkg) {
                 decorator: pkg.derived,
                 body: function () { recompute.db++; return this.a + this.b; },
             },
+            // @reactiveEffect over an inherited-key derived: fires once after the
+            // full chain is wired (E=1 node in the merged plan).
+            {
+                kind: "method",
+                key: "onDb",
+                decorator: pkg.reactiveEffect,
+                body: function () { effectFires.derived++; void this.db; },
+            },
         ],
     });
 
@@ -266,5 +331,5 @@ export function makeClasses(pkg) {
         members: [],
     });
 
-    return { Counter, Base, Derived, Leaf, SYM, recompute, pkg };
+    return { Counter, Base, Derived, Leaf, SYM, recompute, effectFires, pkg };
 }

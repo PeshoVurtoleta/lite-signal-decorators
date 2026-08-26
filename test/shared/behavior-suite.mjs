@@ -4,10 +4,11 @@
 // counts, stats() F-0 deltas, error names/substrings -- never internals.
 //
 // `classes` is the shape makeClasses(pkg) / the compiled fixture export:
-//   { Counter, Base, Derived, Leaf, SYM, recompute, pkg }
+//   { Counter, Base, Derived, Leaf, SYM, recompute, effectFires, pkg }
 // where `pkg` is the package instance that built the classes (so boxOf/rootOf/
-// disposeReactive share the same PLANS WeakMap), and `recompute` is the counter
-// object the derived bodies bump.
+// disposeReactive share the same PLANS WeakMap), `recompute` is the counter
+// object the derived bodies bump, and `effectFires` is the counter object the
+// @reactiveEffect bodies bump.
 //
 // ASCII-only. node:test only.
 
@@ -24,7 +25,7 @@ function active() {
  * distinguishes the build path in failure output.
  */
 export function behaviorSuite(t, classes, label) {
-    const { Counter, Base, Derived, Leaf, SYM, recompute, pkg } = classes;
+    const { Counter, Base, Derived, Leaf, SYM, recompute, effectFires, pkg } = classes;
     const { boxOf, rootOf, disposeReactive, ReactiveDisposedError } = pkg;
 
     t.test(label + ": initial values + declaration-order field read (L2)", () => {
@@ -38,11 +39,11 @@ export function behaviorSuite(t, classes, label) {
         disposeReactive(c);
     });
 
-    t.test(label + ": construction allocates exactly P+D+1 nodes (anchor)", () => {
-        // Counter: P=3 signals + D=2 deriveds + 1 anchor = 6.
+    t.test(label + ": construction allocates exactly P+D+E+1 nodes (anchor)", () => {
+        // Counter: P=3 signals + D=2 deriveds + E=1 effect + 1 anchor = 7.
         const before = active();
         const c = new Counter();
-        assert.equal(active() - before, 6, "Counter node delta");
+        assert.equal(active() - before, 7, "Counter node delta");
         disposeReactive(c);
     });
 
@@ -129,10 +130,10 @@ export function behaviorSuite(t, classes, label) {
         disposeReactive(b);
 
         // Derived (decorated, extends decorated Base): merged P=2 + D=2 +
-        // exactly ONE anchor = 5 -- it does NOT double for the chain.
+        // E=1 effect + exactly ONE anchor = 6 -- it does NOT double for the chain.
         before = active();
         const d = new Derived();
-        assert.equal(active() - before, 5, "Derived node delta (single anchor)");
+        assert.equal(active() - before, 6, "Derived node delta (single anchor)");
         assert.equal(d.a, 1);
         assert.equal(d.b, 2);
         assert.equal(d.da, 101);
@@ -161,6 +162,55 @@ export function behaviorSuite(t, classes, label) {
         const c = new Counter();
         assert.ok(c instanceof Counter);
         disposeReactive(c);
+    });
+
+    t.test(label + ": @reactiveEffect fires exactly once at wire (per effect)", () => {
+        // Counter's onCount fires once; Derived's onDb fires once -- each effect
+        // runs exactly one synchronous first pass at leaf wiring, after every
+        // field and every derived exists.
+        let base = effectFires.counter;
+        const c = new Counter();
+        assert.equal(effectFires.counter - base, 1, "onCount wire-fire = 1");
+        disposeReactive(c);
+
+        base = effectFires.derived;
+        const d = new Derived();
+        assert.equal(effectFires.derived - base, 1, "onDb wire-fire = 1 (inheritance chain)");
+        disposeReactive(d);
+    });
+
+    t.test(label + ": @reactiveEffect re-fires once per tracked mutation", () => {
+        const base = effectFires.counter;
+        const c = new Counter();
+        assert.equal(effectFires.counter - base, 1, "wire fire");
+        c.count = 5;
+        assert.equal(effectFires.counter - base, 2, "one re-fire on the tracked write");
+        c.count = 5; // equal under default Object.is: no propagation, no re-fire.
+        assert.equal(effectFires.counter - base, 2, "no-op write does not re-fire");
+        disposeReactive(c);
+    });
+
+    t.test(label + ": @batched coalesces its writes into one effect flush", () => {
+        const c = new Counter();
+        const base = effectFires.counter;   // already fired once at wire
+        c.bump();                            // two writes inside one batch
+        assert.equal(c.count, 2, "both writes landed");
+        assert.equal(effectFires.counter - base, 1, "batched: one flush, not two");
+        disposeReactive(c);
+    });
+
+    t.test(label + ": post-dispose writes through a captured box fire zero effects", () => {
+        const c = new Counter();
+        // Capture the live box BEFORE dispose so we still hold a write handle.
+        const box = boxOf(c, "count");
+        disposeReactive(c);
+        const base = effectFires.counter;
+        // The anchor cascade tore the effect down; a write through the captured
+        // (now-dead) box cannot resurrect it. Guard the write: a disposed box's
+        // slot may be recycled, so the set is best-effort -- the assertion is
+        // that zero effect executions occur regardless.
+        try { box.set(999); } catch (_) { /* disposed slot: irrelevant */ }
+        assert.equal(effectFires.counter - base, 0, "zero effect executions after dispose");
     });
 
     t.test(label + ": Symbol.dispose disposes (using-style teardown)", () => {

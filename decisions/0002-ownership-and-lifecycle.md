@@ -169,7 +169,32 @@ territory until deeper support exists:
   and F-0 respectively; `lifecycle-torture` pins the Q4 DV-1 exhibit as a
   regression.
 
+### D-2g -- frozen instances refuse disposal (added 0.2.0-preview.1, S2a QA finding)
+
+Status: ACCEPTED (S2a QA). QA repro: `Object.freeze(vm)` on a live wired
+instance, then `disposeReactive(vm)`. Old behavior: `disposeCore` disposed the
+anchor and each signal box, then threw a raw `TypeError` on the first
+poison-slot write (frozen), leaving DISPOSED boxes behind live-looking slots --
+a half-disposed, fail-open corpse whose reads returned stale/dead values.
+
+Ruling: refuse UP FRONT. `disposeReactive` checks `Object.isFrozen(vm)` after the
+not-wired/idempotency checks and BEFORE the D-2f guard, throwing a named
+`throwFrozenDispose(ctorName)`. The refusal is ATOMIC -- nothing is disposed, so
+the instance stays fully live and consistent.
+
+Mechanism + scope: only `Object.isFrozen` blocks the swap (frozen properties are
+non-writable). `Object.seal` and `Object.preventExtensions` leave existing slots
+WRITABLE, so the poison swap still installs -- those stay legal and proceed.
+`Symbol.dispose` routes through `disposeReactive`, so a `using` block over a
+frozen instance is covered by the same refusal. Ruling for callers: dispose
+first, then freeze.
+
+Cost: one `Object.isFrozen` on the cold dispose entry (already a cold,
+construction/teardown path); the allocation-free success path is otherwise
+unchanged.
+
 ## Evidence
 
 `spikes/ownership.mjs` (Q1..Q5 tables), `spikes/poison.mjs` (throw + 0-byte swap
-+ unbranched read + conservation). Both exit 0; SPIKE lines PASS.
++ unbranched read + conservation). Both exit 0; SPIKE lines PASS. D-2g repro in
+QA's `test/10-qa-s2a-boundary.test.mjs` (frozen-dispose case).

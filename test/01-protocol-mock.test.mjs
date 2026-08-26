@@ -119,10 +119,14 @@ test("PD-8 double host is rejected", () => {
     );
 });
 
-test("PD-8 reactiveHost options are rejected (no options in 0.1.0)", () => {
+test("PD-11 reactiveHost unknown option key -> did-you-mean over [registry]", () => {
+    // The 0.1.0 "takes no options" message is retired: reactiveHost now accepts
+    // { registry }, so an unknown host key gets the standard unknown-option
+    // did-you-mean over the known set ["registry"].
     assert.throws(
-        () => reactiveHost({ registry: {} }),
-        (e) => e instanceof TypeError && /reactiveHost takes no options/.test(e.message),
+        () => reactiveHost({ registy: {} }),
+        (e) => e instanceof TypeError && /unknown option/.test(e.message) &&
+            /did you mean `registry`/.test(e.message),
     );
 });
 
@@ -220,7 +224,9 @@ test("PD-6 subclass redeclaring a base reactive key throws at claim", () => {
                 { kind: "accessor", key: "k", decorator: reactive, value: () => 2 },
             ],
         }),
-        (e) => /declared twice across the prototype chain/.test(e.message),
+        // The duplicate-key message now names BOTH causes (subclass
+        // redeclaration OR stacked package decorators on one member).
+        (e) => /declared twice/.test(e.message),
     );
     drainPending();
 });

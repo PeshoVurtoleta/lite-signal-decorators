@@ -1,6 +1,6 @@
 # @zakkster/lite-signal-decorators
 
-VERSION 0.1.0
+VERSION 0.2.0-preview.1
 
 > Stage-3 decorator layer over @zakkster/lite-signal. Turns a plain class into a
 > reactive view-model where each instance has a measured per-property cost, a
@@ -10,20 +10,42 @@ VERSION 0.1.0
 
 A `@reactive accessor` becomes a per-instance signal box stored in a unique
 symbol slot. A `@derived get` becomes a lazy computed owned by the instance's
-anchor. `@reactiveHost` is the one place wiring happens -- its most-derived
-constructor builds the anchor and every derived exactly once, after all fields
-initialize. `disposeReactive` cascades that anchor, disposes each signal box,
-and swaps every slot for a poison handle, so any later read/write throws a named
+anchor. A `@reactiveEffect` method auto-runs as an effect after wiring; a
+`@batched` method runs its writes inside one engine batch. `@reactiveHost` is
+the one place wiring happens -- its most-derived constructor builds the anchor,
+every derived, and every effect exactly once, after all fields initialize.
+`defineReactive(Class, spec)` is the buildless twin: the identical wiring with
+zero decorator syntax, sharing the SAME core by function identity.
+`disposeReactive` cascades that anchor, disposes each signal box, and swaps every
+slot for a poison handle, so any later read/write throws a named
 `ReactiveDisposedError`.
 
-## Exports (8)
+## Exports (11)
 
 - `reactive` -- `@reactive accessor x = v` (bare) or `@reactive({ equals })`
   (factory). Declares a per-instance signal.
 - `derived` -- `@derived get y()` (bare) or `@derived({ equals })` (factory).
   Declares a lazy computed derived from other reactive members.
-- `reactiveHost` -- `@reactiveHost` (bare) or `@reactiveHost()` (factory). The
-  single wiring site; wraps the class. No options in 0.1.0.
+- `reactiveEffect` -- `@reactiveEffect m()` (bare) or
+  `@reactiveEffect({ scheduler })` (factory). A method that auto-runs as an
+  effect once the instance is wired. The auto-effect tracks; the public method is
+  a leak-guarded manual entry (a call inside a foreign tracking scope is
+  untracked, adding zero stray dependencies -- D-4b). Manual calls are also
+  identity-guarded (D-4e): invoking a decorated method on a foreign, primitive,
+  null, or cross-class receiver throws a named error instead of running against
+  the wrong instance.
+- `batched` -- `@batched m()` (bare) or `@batched()` (factory). Runs the method
+  body inside one engine batch. Action-grade (one call per user intent), NOT a
+  per-frame path: it allocates a thunk + rest-array per call by design, so it is
+  excluded from the zero-GC hot-path gates. Buildless callers batch with
+  `registry.batch(...)` directly (no `batched` section in the spec).
+- `reactiveHost` -- `@reactiveHost` (bare) or `@reactiveHost({ registry })`
+  (factory). The single wiring site; wraps the class. A `registry` isolates the
+  whole host chain (see the registry law).
+- `defineReactive(Class, spec) -> Class'` -- the buildless twin. `spec` is
+  `{ signals, deriveds, effects, host }`; it installs the members on
+  `Class.prototype` and wraps the class through the same host step. See the
+  buildless contract.
 - `disposeReactive(vm) -> boolean` -- cascade + poison teardown. Idempotent: a
   second call returns `false` and changes nothing.
 - `boxOf(vm, key) -> SignalBox | ComputedBox` -- the live box behind a member;
@@ -33,34 +55,85 @@ and swaps every slot for a poison handle, so any later read/write throws a named
   `forEachOwned` / lite-devtools. Throws `ReactiveDisposedError` after dispose.
 - `ReactiveDisposedError` -- `extends Error`, `name` `"ReactiveDisposedError"`,
   fields `className` and `key`.
-- `VERSION` -- `"0.1.0"`.
+- `VERSION` -- `"0.2.0-preview.1"`.
+
+## Registry law (one registry per host chain)
+
+`@reactiveHost({ registry })` (and `defineReactive` `host: { registry }`) binds
+the WHOLE host chain to a `Registry` from lite-signal `createRegistry()`. Every
+engine call the package makes -- `signalBox`, `computedBox`, `effect`,
+`createRoot`, `getOwner`, `runWithOwner`, `dispose`, `nodeId`, `isTracking`,
+`batch`, `untrack` -- routes through that bound registry. The `registry` value is
+duck-checked for all 11 methods; a `RegistryConfig` (or a partial facade) is a
+named throw naming the first missing method. A subclass may repeat the SAME
+registry object or omit it (inherits the ancestor's); passing a DIFFERENT
+registry down a chain is a named throw. This closes the cross-registry dispose
+trap: lite-signal's default `dispose` is a silent no-op across registries, so a
+custom-registry instance torn down through the default would leak -- routing
+every call through the bound registry means it never does. `setDefaultRegistry`
+is out of contract: the facade captures the import-time top-level helpers, so a
+consumer swapping the default registry mid-life is not supported.
 
 ## Disposal law
 
-One anchor per instance owns all deriveds; signal boxes are created bare (not
-adopted) and disposed explicitly. `disposeReactive` (or a `using` block via
-`Symbol.dispose`) is the only lifecycle owner. Dispose is allocation-free on the
-success path and idempotent. After dispose, every member touch, `boxOf`, and
-`rootOf` throw `ReactiveDisposedError` naming `Class.key`. Calling
-`disposeReactive(this)` from inside the instance's own `@derived` computation
-throws a named error -- derived getters must be pure; dispose from an effect, a
-subscription, or plain code instead.
+One anchor per instance owns all deriveds and effects; signal boxes are created
+bare (not adopted) and disposed explicitly. `disposeReactive` (or a `using`
+block via `Symbol.dispose`) is the only lifecycle owner. Dispose is
+allocation-free on the success path and idempotent. After dispose, every member
+touch, `boxOf`, and `rootOf` throw `ReactiveDisposedError` naming `Class.key`.
+Calling `disposeReactive(this)` from inside the instance's own `@derived`
+computation throws a named error -- derived getters must be pure; dispose from an
+effect, a subscription, or plain code instead. Self-dispose from inside an OWNED
+`@reactiveEffect` is ALLOWED (D-4d): the current run completes, any later
+decorated-member touch in the same body throws `ReactiveDisposedError`, no
+re-runs follow, and conservation is exact -- the D-2f derived guard never fires
+for effects. Disposing a FROZEN instance is refused up front with a named error
+(D-2g): the poison swap cannot be installed on a frozen object, so a partial
+half-dispose is never started (`using` over a frozen instance is covered too;
+`Object.seal`/`preventExtensions` stay fine -- slots remain writable).
 
-## Rejections (all named, all fail-closed, all at decoration time)
+## Buildless contract (defineReactive)
+
+`defineReactive(Class, spec)` is for consumers without a Stage-3 transpiler. The
+spec normalizes (fail closed; `Reflect.ownKeys`, so symbol keys work):
+
+- `signals`: an array of keys (each initial `undefined`) OR a map
+  `{ key: value | { initial | init | equals } }`. A plain non-function,
+  non-object value is the initial; a descriptor uses `initial` (verbatim) or
+  `init` `(self) => value` (per instance), never both; a bare function is a named
+  throw (ambiguous -- wrap it in `{ initial: fn }` or `{ init }`).
+- `deriveds`: a map `{ key: (self) => value | { get, equals } }`.
+- `effects`: a MAP ONLY `{ key: (self) => void | { run, scheduler } }`.
+- `host`: `{ registry }` or omitted -- the same validation as `@reactiveHost`.
+
+Spec-declared members that collide with an own property of `Class.prototype` are
+a named throw. The class's own constructor runs BEFORE wiring, so it must not
+touch spec-declared members (a prewired handle turns any such touch into a named
+error) -- put initials in the spec. Post-construction behavior is in full parity
+with the decorator path: values, deriveds, effect methods, disposal, poison, and
+capacity accounting are identical because both front doors call the SAME wiring
+core.
+
+## Rejections (all named, all fail-closed, all at decoration/definition time)
 
 Legacy emit, wrong decorator kind, static members, private (#) members, unknown
-option keys (with a nearest-key did-you-mean), non-function `equals`, double
-`@reactiveHost`, host options, and orphaned members (reactive members whose
-class never got `@reactiveHost`) each throw a named error.
+option keys (with a nearest-key did-you-mean), non-function `equals`/`scheduler`,
+double `@reactiveHost`, an unknown host option, orphaned members (reactive
+members whose class never got a host), duplicate keys (subclass redeclaration OR
+two stacked package decorators on one member), an invalid host `registry`, a
+heterogeneous registry chain, and every `defineReactive` spec shape error each
+throw a named error.
 
 ## Peer range
 
 Requires `@zakkster/lite-signal` `>=1.5.0 <2.0.0` (peer dependency). Uses
 `signalBox`, `computedBox`, `effect`, `createRoot`, `getOwner`, `runWithOwner`,
-and `dispose` from it.
+`dispose`, `nodeId`, `isTracking`, `batch`, and `untrack` from it (all 11 also
+routed per-registry via `createRegistry()`).
 
 ## Scope note
 
-0.1.0 ships the decorator core. Not yet included: `@reactiveEffect`, `batched`,
-`defineReactive` (buildless co-export), sized-registry host options, cost
-introspection, labels, and private-member support.
+0.2.0-preview.1 ships the full runtime surface: the decorator core plus
+`@reactiveEffect`, `@batched`, `@reactiveHost({ registry })`, and
+`defineReactive`. Not yet included: cost introspection (`costOf`/`capacityFor`),
+labels, an audit hook, and private-member support.

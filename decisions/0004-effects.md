@@ -94,3 +94,85 @@ the absolute ns is informational, not a hot-path gate.
 `spikes/manual-call.mjs` (leak test raw=1/guarded=0/wrapped=0; K=10 cold-process
 common-path speed raw 4.81 / guarded 6.73 / wrapped 8.02). `isTracking()` is
 exported by lite-signal 1.5.0 and is O(1).
+
+## D-4d -- self-dispose from an owned effect (added 0.2.0-preview.1, S2a)
+
+Status: ACCEPTED (S2a). Evidence: probe run 2026-08-26 (peer 1.5.0, Node 26.3.1,
+`scratchpad/d4d-probe.mjs`), recorded verbatim below.
+
+### Context
+
+`@reactiveEffect` wires the auto-effect UNDER the instance anchor (D-4a). A body
+that calls `disposeReactive(this)` therefore cascades the very owner it is
+running in. The question S2a must pin: is that allowed, and with what semantics?
+An effect is not a `@derived`, so the D-2f purity guard (which fires only for a
+derived disposing its own computation) must NOT intercept it.
+
+### Probe (run 2026-08-26, peer 1.5.0, Node 26.3.1)
+
+| Case | Result |
+|------|--------|
+| dispose(anchor) from inside an OWNED effect, clean return | fires exact (3), no throw, conservation exact |
+| same, then keep reading a bare signal in the same run | read succeeds, no throw, conservation exact |
+| effect body throws on FIRST run under runWithOwner | propagates synchronously to the effect() call site |
+| nodeId(effectDisposeHandle) === getOwner().id inside the body | true |
+
+### Ruling: self-dispose from an owned effect is ALLOWED.
+
+Pinned semantics:
+
+- The CURRENT run completes normally; a clean return does not throw.
+- Any LATER decorated-member touch in the remaining body throws
+  `ReactiveDisposedError` (the poison law -- the slot was swapped for its poison
+  handle by `disposeCore`), named `Class.key`.
+- No FUTURE re-runs: the effect node was cascaded by the anchor dispose, so a
+  subsequent dependency change re-runs nothing.
+- Conservation is EXACT: `disposeCore` runs once (idempotency sentinel on the
+  anchor), and a second `disposeReactive(this)` returns `false`.
+- The `disposeReactive(this)` call returns `true`.
+- The D-2f derived guard must NOT fire for effects: it iterates `plan.deriveds`
+  only, and an effect owner's `nodeId` never matches a derived slot's box, so a
+  self-dispose from an owned effect is never mistaken for a derived's impure
+  self-dispose. A test pins this non-interference.
+
+### Consequences
+
+- `disposeReactive` keeps its D-2f guard scoped to deriveds; effects pass
+  through to `disposeCore` unimpeded.
+- Documented in llms.txt beside the D-2f line.
+
+### D-4e -- manual-call identity guard (added 0.2.0-preview.1, S2a QA finding)
+
+Status: ACCEPTED (S2a QA). Applies to BOTH manual public forms: the
+`@reactiveEffect` guarded method AND the `@batched` batched method.
+
+QA repro: extract a decorated method function and call it on a wrong receiver --
+`Class.prototype.m.call(foreign)`, `.call(null)`, `.call(primitive)`, or on an
+UNRELATED reactive instance of another host. The old public form only checked
+`rec.plan === null` (a per-rec, receiver-blind guard), so a manual call on a
+foreign `this` sailed past it and ran the body against a receiver that has no
+matching slots -- surfacing a confusing raw error (or worse, a partial effect)
+instead of a named fail-closed refusal.
+
+Ruling: after the `p === null` missing-host check, add a plan-membership check on
+`this`:
+```
+const ip = planOf(this);
+if (ip === undefined || ip.byKey.get(rec.key) !== rec) throwNotWired(`${p.ctorName}.${keyLabel(rec.key)}`);
+```
+Mechanism -- byKey IDENTITY, not plan identity: ancestor recs are merged into a
+subclass plan BY REFERENCE, so a `Derived` instance calling a `Base`-declared
+method resolves `ip.byKey.get(key) === rec` and passes. A foreign/cross-class
+reactive instance has a different rec (or none) under that key and fails closed;
+`planOf(null | primitive | plain object)` returns undefined and fails closed --
+all through the existing `throwNotWired` message shape. During-construction
+calls still pass this check (the plan exists) and fail closed DOWNSTREAM via the
+PD-4 prewired slots (unchanged). A disposed instance still passes (its plan and
+byKey are intact) and fails closed via the poison slots -- preserving QA's
+disposed-contrast pin.
+
+Cost: the check is on the COLD manual-call path only (`@reactiveEffect` auto-runs
+as an effect over the ORIGINAL fn, which is untouched; `@batched` is action-grade
+by contract). Zero effect on the hot accessor canon or the auto-effect body.
+
+QA repro lives in `test/10-qa-s2a-boundary.test.mjs` (manual-call clusters E1/E2).
