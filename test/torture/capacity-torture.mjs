@@ -31,7 +31,7 @@
 //
 // ASCII-only.
 
-import { signalBox, dispose as sigDispose, stats } from "@zakkster/lite-signal";
+import { signalBox, dispose as sigDispose, stats, createRegistry } from "@zakkster/lite-signal";
 import * as pkg from "../../SignalDecorators.js";
 import { buildClass } from "../shared/mock-emitter.mjs";
 import {
@@ -175,6 +175,98 @@ function runCase(label, Shape, headroom, checkKey) {
     // Non-break path already freed; nothing held. (Break dies at the revival
     // check above, so control flow never reaches here.)
 }
+
+// --- capacityFor round-trip lanes (PD-26 / decision 0007) ---------------------
+//
+// capacityFor([[Shape, K]]) sizes a registry that holds EXACTLY K instances to
+// the last; the (K+1)-th throws CapacityError BY NAME. Two bindings are
+// exercised:
+//   NODE-bound -- a chain shape sized to `cfg.maxNodes` exactly (link budget
+//     given slack): the (K+1)-th overflows at CONSTRUCTION (node allocation).
+//   LINK-bound -- a derived-heavy fan given node slack but `cfg.maxLinks`
+//     exactly: the (K+1)-th constructs, then overflows forming its
+//     (maxLinks+1)-th link on first read (0007's dynamic-link ceiling).
+// Every instance is constructed AND used (all deriveds read). Conservation F-0
+// holds on the custom registry after teardown, and the default registry never
+// moves (these lanes are registry-isolated).
+//
+// BREAK (TORTURE_BREAK=capacity-torture): the sized config is loosened by exactly
+// one instance's cost along the binding dimension, so the (K+1)-th now FITS --
+// the "must throw CapacityError" assertion then fails and the process exits
+// non-zero. These lanes run FIRST, so the control breaks on a capacityFor lane.
+
+function capChain(id, reg) {
+    return buildClass({ name: id, classDecorator: pkg.reactiveHost({ registry: reg }), members: [
+        acc("a"), acc("b"),
+        { kind: "getter", key: "d0", decorator: pkg.derived, body: function () { return this.a; } },
+        { kind: "getter", key: "d1", decorator: pkg.derived, body: function () { return this.d0 + this.b; } },
+    ] });
+}
+
+function capFan(id, reg) {
+    return buildClass({ name: id, classDecorator: pkg.reactiveHost({ registry: reg }), members: [
+        acc("a"), acc("b"), acc("c"), acc("d"),
+        { kind: "getter", key: "s2", decorator: pkg.derived, body: function () { return this.a + this.b; } },
+        { kind: "getter", key: "s3", decorator: pkg.derived, body: function () { return this.a + this.b + this.c; } },
+        { kind: "getter", key: "all", decorator: pkg.derived, body: function () { return this.a + this.b + this.c + this.d; } },
+    ] });
+}
+
+function capacityRoundTrip(label, make, derivedKeys, K, binding) {
+    const defBase = conservationBaseline();               // default registry: must not move
+    // cost is shape-determined -- probe on a scratch registry (capacityFor reuses
+    // the cached costOf internally).
+    const scratch = createRegistry({ maxNodes: 256 });
+    const Probe = make("CapProbe_" + label, scratch);
+    const cost = pkg.costOf(Probe);
+    const cfg = pkg.capacityFor([[Probe, K]]);
+
+    // NODE-bound: nodes exact, links slack. LINK-bound: links exact, nodes slack.
+    let regCfg;
+    if (binding === "link") {
+        regCfg = { maxNodes: cost.nodes * (K + 4), maxLinks: cfg.maxLinks, prealloc: "eager", onCapacityExceeded: "throw" };
+    } else {
+        regCfg = { maxNodes: cfg.maxNodes, maxLinks: cfg.maxLinks + cost.links * 4, prealloc: "eager", onCapacityExceeded: "throw" };
+    }
+    // BREAK: loosen the binding dimension by one instance so (K+1) fits.
+    if (breakActive(NAME)) {
+        if (binding === "link") regCfg.maxLinks += cost.links;
+        else regCfg.maxNodes += cost.nodes;
+    }
+
+    const reg = createRegistry(regCfg);
+    const Host = make("CapHost_" + label, reg);
+    const held = [];
+    for (let i = 0; i < K; i++) {
+        const inst = new Host();
+        for (let k = 0; k < derivedKeys.length; k++) void inst[derivedKeys[k]];   // use it
+        held.push(inst);
+    }
+    check(held.length === K, () => label + ": constructed " + held.length + " of " + K);
+
+    // The (K+1)-th: overflow BY NAME. NODE-bound throws at construction; LINK-bound
+    // constructs then throws on the read that forms the overflowing link.
+    let over = null;
+    let extra = null;
+    try {
+        extra = new Host();
+        for (let k = 0; k < derivedKeys.length; k++) void extra[derivedKeys[k]];
+    } catch (e) { over = e; }
+    if (extra !== null) { try { pkg.disposeReactive(extra); } catch (_) { /* half-wired cleanup */ } }
+    check(over !== null, () => label + ": the (K+1)-th did not throw at the " + binding + " ceiling");
+    check(over.name === "CapacityError", () => label + ": (K+1)-th name=" + (over && over.name) + " expected CapacityError");
+
+    // teardown -> F-0 on the custom registry; default registry never moved.
+    for (let i = 0; i < held.length; i++) pkg.disposeReactive(held[i]);
+    check(reg.stats().activeNodes === 0, () => label + ": custom registry activeNodes=" + reg.stats().activeNodes + " != 0 after teardown");
+    check(reg.stats().activeLinks === 0, () => label + ": custom registry activeLinks=" + reg.stats().activeLinks + " != 0 after teardown");
+    assertConserved(defBase, label + " default-registry conservation");
+}
+
+RUN.op = 20;
+capacityRoundTrip("node-bound chain", capChain, ["d0", "d1"], 8, "node");
+RUN.op = 21;
+capacityRoundTrip("link-bound fan", capFan, ["s2", "s3", "all"], 6, "link");
 
 // (a) K-th signal box -- P=3, headroom=2: s0, s1 fit; s2 overflows.
 RUN.op = 0;

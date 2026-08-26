@@ -1,6 +1,6 @@
 # @zakkster/lite-signal-decorators
 
-VERSION 0.3.0
+VERSION 0.4.0
 
 > Stage-3 decorator layer over @zakkster/lite-signal. Turns a plain class into a
 > reactive view-model where each instance has a measured per-property cost, a
@@ -20,7 +20,7 @@ zero decorator syntax, sharing the SAME core by function identity.
 slot for a poison handle, so any later read/write throws a named
 `ReactiveDisposedError`.
 
-## Exports (11)
+## Exports (16)
 
 - `reactive` -- `@reactive accessor x = v` (bare) or `@reactive({ equals })`
   (factory). Declares a per-instance signal.
@@ -53,9 +53,22 @@ slot for a poison handle, so any later read/write throws a named
   dispose.
 - `rootOf(vm) -> NodeDescriptor` -- the instance's anchor descriptor; feeds
   `forEachOwned` / lite-devtools. Throws `ReactiveDisposedError` after dispose.
+- `costOf(Factory) -> { nodes, links, signals, deriveds, effects }` -- the
+  measured settled per-instance cost on the class's bound registry (frozen,
+  cached). Double-probed: an inconclusive or polluted probe throws, never
+  guesses. `nodes` = P+D+E+1; `links` = the first-full-read link count. See
+  "Introspection & audit".
+- `capacityFor(inventory, { headroom }?) -> RegistryConfig` -- size a
+  `createRegistry` config from `[Factory, count]` pairs. Nodes exact, links x
+  `headroom` (default 1). Fail-closed inventory validation.
+- `enableLabels(on)` / `labelOf(idOrHandle, registry?) -> string | undefined` --
+  opt-in devtools labels (default OFF); per-registry `nodeId -> "Class.prop" /
+  "Class#method" / "Class@anchor"`.
+- `auditReactive(on)` -- opt-in leak auditor (default OFF); a lazy
+  `FinalizationRegistry` reports any instance GC'd without `disposeReactive`.
 - `ReactiveDisposedError` -- `extends Error`, `name` `"ReactiveDisposedError"`,
   fields `className` and `key`.
-- `VERSION` -- `"0.3.0"`.
+- `VERSION` -- `"0.4.0"`.
 
 ## Registry law (one registry per host chain)
 
@@ -118,6 +131,45 @@ with the decorator path: values, deriveds, effect methods, disposal, poison, and
 capacity accounting are identical because both front doors call the SAME wiring
 core.
 
+## Introspection & audit (S4; all cold, all opt-in)
+
+`costOf(Factory)` measures a class's settled per-instance cost by a stats-delta
+probe on its bound registry: construct, read every `@derived` once (forcing the
+lazy links), snapshot, dispose, verify the floor -- run TWICE, requiring
+identical deltas. An inconclusive probe (a data-dependent derived read, or a
+registry mutated mid-probe) or a floor-verify failure THROWS a named error;
+costOf never returns a guess. `nodes` equals P+D+E+1 (the R-A law); `links` is
+the first-full-read count. The result is frozen and cached per class. costOf
+constructs the probe instance with NO constructor arguments.
+
+`capacityFor(inventory, { headroom } = {})` turns `[Factory, count]` pairs into a
+ready `createRegistry` config `{ maxNodes, maxLinks, prealloc: "eager",
+onCapacityExceeded: "throw" }`. Nodes are exact (`sum(cost.nodes x count)`);
+links are `sum(cost.links x count)` scaled by `headroom` (default 1 = exact),
+floored at the engine minimum of 1 so a signals-only inventory stays
+constructible.
+FIXED-shape deriveds provision exactly; a BRANCHY derived whose active branch
+reads more members than the probe measured under-provisions and the engine throws
+`CapacityError` at link formation (loud, named -- raise `headroom` for such
+workloads). See decisions/0007.
+
+Labels (`enableLabels(true)`, default OFF) register, at wiring, a per-registry
+`nodeId -> label` for every node an instance creates
+(`"Class.prop"` / `"Class#method"` / `"Class@anchor"`); `labelOf(idOrHandle,
+registry?)` resolves them (an unknown id returns `undefined` -- a miss is not an
+error); `disposeReactive` unregisters. Maps are per-registry (node ids are
+per-registry). OFF adds no hot-path cost -- the accessor canon is byte-identical
+to 0.3.0; labels feed a `graph()`/`toTree()` devtools walk from `rootOf(vm)`.
+
+Audit (`auditReactive(true)`, default OFF) lazily creates one
+`FinalizationRegistry` and reports (one `console.error`) any instance
+garbage-collected WITHOUT `disposeReactive`, naming the class + shape. OFF: no
+`FinalizationRegistry` exists, nothing is registered, wiring measures unchanged.
+Reach: an instance still pinned by its own undisposed derived/effect nodes on a
+long-lived registry is never collected, so audit cannot fire for it -- that
+retention is what the leak/retention torture catches; audit catches instances
+that reach GC without dispose (e.g. a per-scope registry dropped whole).
+
 ## Rejections (all named, all fail-closed, all at decoration/definition time)
 
 Legacy emit, wrong decorator kind, static members, private (#) members, unknown
@@ -137,8 +189,10 @@ routed per-registry via `createRegistry()`).
 
 ## Scope note
 
-0.3.0 = the 0.2.0 runtime surface (unchanged -- the same 11 exports, frozen for
-0.x) plus the dev-side class-reactivity benchmark (`bench/`, private, never
-shipped) and the fleet-soak torture scenario; the formal kill-criteria verdicts
-live in decisions/0006-kill-criteria.md. Not yet included: cost introspection
-(`costOf`/`capacityFor`), labels, an audit hook, and private-member support.
+0.4.0 adds the S4 introspection surface -- 16 exports: the 11 runtime
+exports plus `costOf`, `capacityFor`, `enableLabels`, `labelOf`, and
+`auditReactive` (all cold / opt-in; the hot accessor canon is byte-identical to
+0.3.0). Also present since 0.3.0: the dev-side class-reactivity benchmark
+(`bench/`, private, never shipped) and the fleet-soak torture scenario; the
+formal kill-criteria verdicts live in decisions/0006-kill-criteria.md. Not yet
+included: private-member support.

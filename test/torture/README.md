@@ -17,7 +17,8 @@ node test/torture/run.mjs --lenient          # floor-escalation FAIL -> WARN
 node test/torture/run.mjs --controls         # self-test: every scenario's break
 ```
 
-npm scripts: `torture`, `torture:semantic`, `torture:soak`, `torture:controls`.
+npm scripts: `torture`, `torture:semantic`, `torture:soak`, `torture:controls`,
+`torture:peer-preview` (the forward peer lane -- see below).
 
 Every scenario is independently runnable while iterating:
 
@@ -61,6 +62,8 @@ gate for any control that still exits 0 (a gate that cannot fail is not a gate).
 | batch-untrack-torture | replaces one `peek` with a tracked get (the zero-edge re-run count catches it) |
 | churn-soak            | leaks one instance per 1024 cycles (F-0 / flat-heap sample catches it) |
 | fleet-soak            | leaks one VM per churn rotation (skips its dispose; the F-0 sample catches the off-floor node count) |
+| scope-adoption        | LIES the probe (claims `createScope` is present); on a below-floor engine the first `createScope` call throws (control meaningful even with 1.5.0 installed) |
+| using-dispose         | LIES the probe (claims the engine `[Symbol.dispose]` stamp is present); on a below-floor engine the protocol assertion finds no stamp and fails |
 
 ## TORTURE_SEED -- replay
 
@@ -87,10 +90,51 @@ TORTURE_SEED=12345 node --expose-gc test/torture/ordering-torture.mjs
 | oracle-fuzzer     | semantic | 1.5.0 | seeded shape fuzzer -- decorated vs hand-wired raw twin: every derived value, effect fire count, and onGraphMutation opcode tally match over 20k ops x >=300 seeds; F-0 after teardown |
 | interop-torture   | semantic | 1.5.0 | decorated <-> raw in one graph (both directions) + cross-registry raw-contract pins + registry.destroy() mid-life + P-2 documented limits (indirect self-dispose, untrack-wrapped) |
 | batch-untrack-torture | semantic | 1.5.0 | @batched nesting/flush-at-outermost + exception unwind + `boxOf(...).peek()` adds no edge + untrack() dep suppression + manual guarded calls in batches |
+| scope-adoption    | semantic | 1.6.0 | forward-compat: the peer's `createScope` adoption sharing ONE graph with a decorated instance -- our P+D+E+1 cascade + poison + double-dispose idempotency hold verbatim, bare boxes stay unadopted (exactly one survives the scope disposer), and a decorated instance built INSIDE a `createScope` is NOT adopted (createRoot detachment) so the two ownership worlds never interfere; SKIPS (77) below floor |
+| using-dispose     | semantic | 1.9.0 | forward-compat: the peer's native `[Symbol.dispose]` stamp on engine handles -- `using` over signalBox/effect tears down at block exit, a redundant `[Symbol.dispose]` moves nothing, and a `using`-scoped engine effect observing a decorated instance's box interops with `disposeReactive` (idempotent double-dispose, poison lands, conservation exact); SKIPS (77) below floor |
 | churn-soak        | soak     | 1.5.0 | wall-clock construct/use/dispose soak (`--seconds`): F-0 at each ~1s sample, retained heap flat, gcGate maxMajor 0 across the soak |
 | fleet-soak        | soak     | 1.5.0 | wall-clock FLEET-TICK soak (`--seconds`): a standing 2000-VM fleet (P=4/D=2/E=1, decorated + defineReactive halves) on a dedicated `createRegistry({ maxNodes: 16384, onCapacityExceeded: "throw" })`; every tick writes one field of a rotating VM and reads its derived, each ~1s sample runs a 128-VM partial churn rotation, then asserts F-0 (activeNodes == 16000 exactly), flat retained heap, and effect-counter liveness -- gcGate maxMajor 0 across the soak |
 
 The `soak` group runs `churn-soak` + `fleet-soak`; `--group soak` runs them alone.
+
+## Forward-compat scenarios + the peer-preview lane
+
+`scope-adoption` (floor 1.6.0) and `using-dispose` (floor 1.9.0) are written
+against REAL future `@zakkster/lite-signal` surfaces, feature-detected through
+`test/shared/peer-probe.mjs` (typeof checks only -- never a version parse):
+
+- `scope-adoption` probes `createScope` (a top-level export ADDED in
+  1.6.0-beta-1: the disposable-owner counterpart to `createRoot` -- adopts the
+  computeds/effects created in its body, hands back one cascade-disposer, and
+  does NOT adopt bare signals). Probe: `has("createScope")`.
+- `using-dispose` probes the native `[Symbol.dispose]` stamp on engine handles
+  (ADDED in 1.9.0-preview.6 at five creation sites -- signalBox/computedBox/
+  effect/createRegistry/createScope -- driving the TC39 `using` path). Probe:
+  `hasDisposeProtocol()`, checked structurally on a live signalBox handle.
+
+Below its floor each scenario SKIPS with exit 77; run.mjs's floor-escalation law
+turns a skip AT or ABOVE the floor into a FAIL (a dropped export can never pass
+as a skip). Both scenarios pin that OUR wiring/dispose invariants (bare-box
+non-adoption, the P+D+E+1 anchor cascade, poison, double-dispose idempotency,
+F-0 conservation) hold verbatim under the new engine and share one graph with
+the new feature without interference.
+
+```
+npm run torture:peer-preview
+```
+
+The peer-preview lane (`test/torture/peer-preview.mjs`) scratch-installs the
+unreleased `preview` AND `canary` dist-tags into an isolated temp dir
+(`--ignore-scripts`), builds a COPIED run-root per tag whose node_modules
+overlay substitutes only `@zakkster/lite-signal` (the real package tree and its
+node_modules are never mutated; lite-leak/lite-cleanup/lite-gc-profiler are
+copied so their own `lite-signal` import resolves the overlay), and runs the
+FULL suite against each with `TORTURE_SECONDS=3`. It prints a per-tag verdict
+table and is NON-BLOCKING: a tag whose suite RAN and REPORTED is a completed
+lane even if a scenario FAILED (a failure under a future peer is a loud,
+named FINDING -- not something the lane fixes or hides). A tag whose suite could
+not run at all (install failure, overlay error, killed child) exits the lane
+78-style loud.
 
 ## S2a effect + registry lanes
 

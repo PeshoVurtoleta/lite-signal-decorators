@@ -4,6 +4,80 @@ All notable changes to `@zakkster/lite-signal-decorators` are documented here.
 The format follows Keep a Changelog; this project adheres to Semantic
 Versioning.
 
+## [0.4.0] - 2026-08-26
+
+The introspection release: the surface grows 11 -> 16, every addition cold-path
+or opt-in, the hot accessor canon byte-identical to 0.3.0 (review-diffed
+against the published tarball). Stage gate, measured at closeout: 213/213
+tests on both lanes; torture 15 scenarios (13 pass + the two forward-compat
+scenarios legitimately skipping under the installed 1.5.0 peer) with 15/15
+sabotage controls breaking as required; the peer-preview lane SUITE-GREEN
+(15/15, forward scenarios RUNNING) against lite-signal 1.9.0-preview.6 AND
+1.9.0-canary.1; pack 7 files.
+
+### Added
+
+- `costOf(Factory)` -- the measured, settled per-instance cost on the class's
+  bound registry: `{ nodes, links, signals, deriveds, effects }`, frozen and
+  cached per class. Quiet-required, floor-verified, DOUBLE-probed with
+  identical-deltas-or-throw: an inconclusive probe (a derived whose read set
+  changes between runs, a polluted registry) throws a named error, never
+  guesses. `nodes` reproduces the 0002 Q3 grid exactly (P + D + E + 1);
+  `links` is the first-full-read count.
+- `capacityFor(inventory, { headroom }?)` -- sizes a ready `createRegistry`
+  config from `[Factory, count]` pairs: nodes exact, links x `headroom`
+  floored at the engine minimum, `prealloc: "eager"`,
+  `onCapacityExceeded: "throw"`; fail-closed inventory and options
+  validation. The link-headroom policy -- nodes exact; fixed-shape deriveds
+  provision exactly at first-full-read; branchy-read deriveds fail LOUD with
+  the `headroom` knob as the documented escape -- is recorded with its
+  measured evidence in `decisions/0007-capacity-policy.md`, closing 0002's
+  open question.
+- `enableLabels(on)` / `labelOf(idOrHandle, registry?)` -- opt-in devtools
+  identity (default OFF): per-registry `nodeId -> "Class.prop" /
+  "Class#method" / "Class@anchor"` maps, per-class shared label strings,
+  dispose unregisters, misses return `undefined`. A feature-detected
+  integration test walks lite-devtools `graph()`/`toTree` from `rootOf(vm)`
+  and resolves every walked node. The one-line devtools `labelResolver`
+  upstream proposal is recorded in `decisions/0008-introspection.md`.
+- `auditReactive(on)` -- opt-in leak auditor (default OFF): a lazily-created
+  `FinalizationRegistry` reports any instance collected without
+  `disposeReactive`, naming class and shape; it holds no instance references
+  itself, unregisters on dispose, and registers nothing while off (proven by
+  a child-process `--expose-gc` test).
+- Forward-compat torture: `scope-adoption` (floor 1.6.0) and `using-dispose`
+  (floor 1.9.0), written against the REAL probed future engine surfaces
+  (1.6.0's `createScope` adoption; 1.9.0's native `[Symbol.dispose]` on
+  handles) via a typeof-only feature probe (`test/shared/peer-probe.mjs` --
+  never version parsing). Their sabotage controls lie about the probe, so
+  they fail loudly even under the current peer. Plus `torture:peer-preview`:
+  a scratch-install lane that runs the whole suite against the peer's
+  `preview` and `canary` dist-tags and reports per-tag verdicts.
+- Tests: `12-accounting` (11), `13-labels-audit` (10, incl. the child-process
+  audit fixture), `14-qa-s4-boundary` (21 adversarial pins), and two
+  capacityFor round-trip lanes (node-bound and link-bound) in
+  capacity-torture. Suite 171 -> 213. Dev-only devDependency:
+  `@zakkster/lite-devtools` (integration walk).
+
+### Fixed
+
+- (Found in review) A registry passing the 11-method duck-check but lacking
+  `stats()` -- constructible from the public surface -- made `costOf` and
+  `capacityFor` die with a raw `TypeError` instead of a named error. Now a
+  named, ERR-prefixed throw explains that probing needs a `createRegistry()`
+  registry with its stats ledger. The falsified "no reachable raw path"
+  claim in 0008 is amended with the counterexample preserved, rejection-
+  history style.
+- (Found in QA) `capacityFor`'s options guard borrowed decorator-flavored
+  usage wording for a plain function call, and accepted an ARRAY as an
+  options bag; it now throws the call-form message
+  (`options must be a plain object like { headroom: 1.25 }`) for both.
+  `null` still means "omitted".
+- (Found writing tests) `capacityFor` on a signals-only inventory produced
+  `maxLinks: 0`, which `createRegistry` rejects; the returned links are now
+  floored at the engine minimum of 1 so every valid inventory yields a
+  constructible config.
+
 ## [0.3.0] - 2026-08-26
 
 The class-reactivity benchmark release. Zero runtime changes: the 11-export
@@ -202,6 +276,7 @@ Initial release -- the decorator core.
 - Torture skeleton (`@zakkster/lite-leak` + `@zakkster/lite-gc-profiler`):
   retention, conservation, lifecycle, and zero-GC lanes.
 
+[0.4.0]: https://github.com/PeshoVurtoleta/lite-signal-decorators/releases/tag/v0.4.0
 [0.3.0]: https://github.com/PeshoVurtoleta/lite-signal-decorators/releases/tag/v0.3.0
 [0.2.0]: https://github.com/PeshoVurtoleta/lite-signal-decorators/releases/tag/v0.2.0
 [0.2.0-preview.1]: https://github.com/PeshoVurtoleta/lite-signal-decorators/releases/tag/v0.2.0-preview.1

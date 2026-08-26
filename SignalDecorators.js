@@ -1,5 +1,5 @@
 /**
- * @zakkster/lite-signal-decorators v0.3.0
+ * @zakkster/lite-signal-decorators v0.4.0
  * --------------------
  * Stage-3 decorator layer over @zakkster/lite-signal. Turns a plain class into
  * a reactive view-model with measured per-instance cost and deterministic
@@ -44,6 +44,7 @@ import {
     isTracking,
     batch,
     untrack,
+    stats,
 } from "@zakkster/lite-signal";
 
 // --- Module state -------------------------------------------------------------
@@ -85,10 +86,40 @@ const SCRATCH = [];
 // Hoisted package prefix (PD-15): every cold error message begins with this.
 const ERR = "@zakkster/lite-signal-decorators: ";
 
+// --- Introspection state (S4; all opt-in, all cold/off by default) -----------
+
+// PD-23/PD-24: labels and audit are opt-in debug features. INTROSPECT_ON is the
+// single wiring/dispose gate (= LABELS_ON || AUDIT_ON), so the OFF path pays at
+// most one flag test at wiring and one at dispose -- the hot accessor canon is
+// never touched in either mode.
+let LABELS_ON = false;
+let AUDIT_ON = false;
+let INTROSPECT_ON = false;
+
+// PD-23: per-registry nodeId -> label. nodeIds are per-registry, so a
+// module-global Map would collide across registries; the key is the plan's reg
+// object (DEFAULT_REG facade or a custom Registry).
+const LABEL_MAPS = new WeakMap();       // reg -> Map<number, string>
+// Per-plan label strings, built once at first labeled wiring and shared by every
+// instance of the class.
+const LABEL_STRINGS = new WeakMap();    // plan -> { anchor, signals[], deriveds[], effects[] }
+// The instance's registered label ids, so disposeReactive can unregister exactly
+// them (effect handles are otherwise discarded). Only written while LABELS_ON.
+const LABEL_IDS = Symbol("lite-signal-decorators.labelIds");
+
+// PD-24: costOf result cache (per wrapper class; shape is frozen at decoration).
+const COST_CACHE = new WeakMap();       // Factory -> frozen cost object
+
+// PD-24: the audit FinalizationRegistry is created lazily on first enable and
+// never torn down (a FR holds no strong refs to its targets). Its held value is
+// a plain { className, shape } record -- it must NOT close over the instance.
+let AUDIT_FR = null;
+
 // Known option keys per decorator (unknown-key did-you-mean sets, PD-8/PD-11).
 const KNOWN_OPTION_KEYS = ["equals"];
 const EFFECT_OPTION_KEYS = ["scheduler"];
 const HOST_OPTION_KEYS = ["registry"];
+const CAP_OPTION_KEYS = ["headroom"];
 
 // --- DEFAULT_REG facade (PD-11) ----------------------------------------------
 
@@ -107,6 +138,10 @@ const DEFAULT_REG = Object.freeze({
     isTracking,
     batch,
     untrack,
+    // `stats` is not in REG_METHODS (the duck-check stays at the 11 methods the
+    // wiring/dispose paths use); costOf reads it here for the default registry,
+    // and every custom Registry from createRegistry() exposes it natively.
+    stats,
 });
 
 // The 11 method names a valid Registry must expose (duck-check set, PD-11).
@@ -864,11 +899,22 @@ function wireInstance(inst, plan) {
             }
             // Effects wire AFTER every derived (D-4a): the first synchronous run
             // sees every field and every derived. Dispose handles are DISCARDED --
-            // teardown is the anchor cascade.
+            // teardown is the anchor cascade. The ONE introspection flag test
+            // (S4, PD-23/24): the OFF branch is byte-identical to 0.3.0; the ON
+            // branch captures effect handles for labeling + registers audit.
             const effs = plan.effects;
-            for (let i = 0; i < effs.length; i++) {
-                const e = effs[i];
-                reg.effect(makeEffectBody(inst, e.fn), e.opts);
+            if (INTROSPECT_ON) {
+                const effHandles = LABELS_ON ? [] : null;
+                for (let i = 0; i < effs.length; i++) {
+                    const h = reg.effect(makeEffectBody(inst, effs[i].fn), effs[i].opts);
+                    if (effHandles !== null) effHandles.push(h);
+                }
+                introspectWire(inst, plan, reg, effHandles);
+            } else {
+                for (let i = 0; i < effs.length; i++) {
+                    const e = effs[i];
+                    reg.effect(makeEffectBody(inst, e.fn), e.opts);
+                }
             }
         });
     } catch (e) {
@@ -1258,6 +1304,10 @@ export function disposeReactive(vm) {
             }
         }
     }
+    // S4 introspection cleanup (one flag test on the OFF dispose path): drop this
+    // instance's label entries and unregister it from the audit FR so a proper
+    // dispose is never mistaken for a silent death.
+    if (INTROSPECT_ON) introspectDispose(vm, reg);
     disposeCore(vm, plan);
     return true;
 }
@@ -1295,7 +1345,320 @@ export function rootOf(vm) {
     return a;
 }
 
+// --- Introspection & audit (S4; all cold / opt-in) ----------------------------
+
+function throwCostFactory() {
+    throw new TypeError(
+        `${ERR}costOf(Factory) -- Factory must be a @reactiveHost / defineReactive wrapper class.`,
+    );
+}
+
+function throwCostNoPlan() {
+    throw new Error(
+        `${ERR}costOf(Factory) -- that class has no reactive plan; pass the class returned by @reactiveHost or defineReactive, not the undecorated inner class.`,
+    );
+}
+
+function throwCostNoStats(name) {
+    throw new TypeError(
+        `${ERR}costOf(${name}) -- the bound registry has no stats() ledger; costOf/capacityFor need a createRegistry() registry (which always carries the stats ledger). A hand-rolled 11-method registry facade cannot be probed.`,
+    );
+}
+
+function throwCostInconclusive(name, a, b) {
+    throw new Error(
+        `${ERR}costOf(${name}) -- inconclusive: two probes disagreed (nodes ${a.nodes}/${b.nodes}, links ${a.links}/${b.links}). A data-dependent derived read, or a registry mutated mid-probe, makes the cost non-deterministic; costOf fails closed rather than guess.`,
+    );
+}
+
+function throwCostNodeMismatch(name, got, want) {
+    throw new Error(
+        `${ERR}costOf(${name}) -- probed node count ${got} != P+D+E+1 (${want}); the bound registry was not quiet during the probe.`,
+    );
+}
+
+function throwCostFloor(name) {
+    throw new Error(
+        `${ERR}costOf(${name}) -- dispose did not return the bound registry to its pre-probe floor; the probe could not run against a quiet registry.`,
+    );
+}
+
+// costOf runs the probe twice and requires identical deltas: an inconclusive
+// probe is a fail-closed THROW, never a guessed number (PD-21).
+function probeCost(Factory, plan, reg) {
+    const before = reg.stats();
+    const inst = new Factory();
+    const ders = plan.deriveds;
+    for (let i = 0; i < ders.length; i++) void inst[ders[i].key];   // force lazy links
+    const mid = reg.stats();
+    const nodes = mid.activeNodes - before.activeNodes;
+    const links = mid.activeLinks - before.activeLinks;
+    disposeReactive(inst);
+    const after = reg.stats();
+    if (after.activeNodes !== before.activeNodes || after.activeLinks !== before.activeLinks) {
+        throwCostFloor(plan.ctorName);
+    }
+    return { nodes, links };
+}
+
+/**
+ * Measure the settled per-instance cost of a reactive class on its bound
+ * registry: construct, read every `@derived` once (forcing the lazy links),
+ * snapshot, dispose, verify the floor -- twice, requiring identical deltas.
+ * Returns a frozen `{ nodes, links, signals, deriveds, effects }`; `nodes`
+ * equals P+D+E+1. Cached per class. Throws (never guesses) on an inconclusive
+ * or polluted probe. Constructs the probe instance with no arguments.
+ */
+export function costOf(Factory) {
+    if (typeof Factory !== "function") throwCostFactory();
+    const cached = COST_CACHE.get(Factory);
+    if (cached !== undefined) return cached;
+    const plan = PLANS.get(Factory);
+    if (plan === undefined) throwCostNoPlan();
+    const reg = plan.reg;
+    // The 11-method REG_METHODS duck-check excludes stats (the wiring/dispose
+    // paths never need it), so a hand-rolled facade can be duck-valid yet lack
+    // stats -- guard here rather than let probeCost throw a raw TypeError.
+    if (typeof reg.stats !== "function") throwCostNoStats(plan.ctorName);
+    const first = probeCost(Factory, plan, reg);
+    const second = probeCost(Factory, plan, reg);
+    if (first.nodes !== second.nodes || first.links !== second.links) {
+        throwCostInconclusive(plan.ctorName, first, second);
+    }
+    const sig = plan.signals.length;
+    const der = plan.deriveds.length;
+    const eff = plan.effects.length;
+    const expected = sig + der + eff + 1;
+    if (first.nodes !== expected) throwCostNodeMismatch(plan.ctorName, first.nodes, expected);
+    const result = Object.freeze({
+        nodes: first.nodes,
+        links: first.links,
+        signals: sig,
+        deriveds: der,
+        effects: eff,
+    });
+    COST_CACHE.set(Factory, result);
+    return result;
+}
+
+function throwCapInventory() {
+    throw new TypeError(
+        `${ERR}capacityFor(inventory) -- inventory must be a non-empty array of [Factory, count] pairs.`,
+    );
+}
+
+function throwCapPair(i) {
+    throw new TypeError(
+        `${ERR}capacityFor -- inventory[${i}] must be a [Factory, count] pair.`,
+    );
+}
+
+function throwCapFactory(i) {
+    throw new TypeError(
+        `${ERR}capacityFor -- inventory[${i}][0] must be a @reactiveHost / defineReactive wrapper class.`,
+    );
+}
+
+function throwCapCount(i) {
+    throw new TypeError(
+        `${ERR}capacityFor -- inventory[${i}][1] must be a positive integer count.`,
+    );
+}
+
+function throwCapHeadroom() {
+    throw new TypeError(
+        `${ERR}capacityFor -- headroom must be a finite number >= 1.`,
+    );
+}
+
+function throwCapOptions(options) {
+    const got = Array.isArray(options) ? "an array" : typeof options;
+    throw new TypeError(
+        `${ERR}capacityFor(inventory, options?) -- options must be a plain object like { headroom: 1.25 }; got ${got}.`,
+    );
+}
+
+/**
+ * Size a `createRegistry` config for a stated inventory of `[Factory, count]`
+ * pairs. Nodes are exact (`sum(cost.nodes x count)`); links are
+ * `sum(cost.links x count)` scaled by `headroom` (default 1 -- exact; see
+ * decisions/0007). Returns
+ * `{ maxNodes, maxLinks, prealloc: "eager", onCapacityExceeded: "throw" }`.
+ * Fail-closed on a non-factory, a non-positive/non-integer count, an empty
+ * inventory, or a bad `headroom`.
+ */
+export function capacityFor(inventory, options) {
+    if (!Array.isArray(inventory) || inventory.length === 0) throwCapInventory();
+    let headroom = 1;
+    if (options !== undefined && options !== null) {   // null == omitted (preserved)
+        if (typeof options !== "object" || Array.isArray(options)) throwCapOptions(options);
+        const okeys = Object.keys(options);
+        for (let i = 0; i < okeys.length; i++) {
+            if (okeys[i] !== "headroom") throwUnknownOption("capacityFor", okeys[i], CAP_OPTION_KEYS);
+        }
+        if (options.headroom !== undefined) {
+            const h = options.headroom;
+            if (typeof h !== "number" || !isFinite(h) || h < 1) throwCapHeadroom();
+            headroom = h;
+        }
+    }
+    let totalNodes = 0;
+    let totalLinks = 0;
+    for (let i = 0; i < inventory.length; i++) {
+        const pair = inventory[i];
+        if (!Array.isArray(pair) || pair.length !== 2) throwCapPair(i);
+        const Factory = pair[0];
+        const count = pair[1];
+        if (typeof Factory !== "function") throwCapFactory(i);
+        if (typeof count !== "number" || !Number.isInteger(count) || count <= 0) throwCapCount(i);
+        const cost = costOf(Factory);
+        totalNodes += cost.nodes * count;
+        totalLinks += cost.links * count;
+    }
+    return {
+        maxNodes: totalNodes,                          // exact -- nodes are deterministic
+        // links x headroom, floored at the engine minimum of 1 (createRegistry
+        // rejects maxLinks: 0) so a signals-only inventory still yields a
+        // constructible config (0007). Floor is applied AFTER the multiplier.
+        maxLinks: Math.max(1, Math.ceil(totalLinks * headroom)),
+        prealloc: "eager",
+        onCapacityExceeded: "throw",
+    };
+}
+
+function throwFlagArg(what) {
+    throw new TypeError(`${ERR}${what}(on) -- on must be a boolean.`);
+}
+
+// Per-class label strings, built once and shared by every instance (PD-23).
+function labelStringsFor(plan) {
+    let s = LABEL_STRINGS.get(plan);
+    if (s !== undefined) return s;
+    const name = plan.ctorName;
+    const sig = [];
+    for (let i = 0; i < plan.signals.length; i++) sig.push(`${name}.${keyLabel(plan.signals[i].key)}`);
+    const der = [];
+    for (let i = 0; i < plan.deriveds.length; i++) der.push(`${name}.${keyLabel(plan.deriveds[i].key)}`);
+    const eff = [];
+    for (let i = 0; i < plan.effects.length; i++) eff.push(`${name}#${keyLabel(plan.effects[i].key)}`);
+    s = { anchor: `${name}@anchor`, signals: sig, deriveds: der, effects: eff };
+    LABEL_STRINGS.set(plan, s);
+    return s;
+}
+
+function registerLabels(inst, plan, reg, effHandles) {
+    let map = LABEL_MAPS.get(reg);
+    if (map === undefined) {
+        map = new Map();
+        LABEL_MAPS.set(reg, map);
+    }
+    const strings = labelStringsFor(plan);
+    const ids = [];
+    const anchorId = reg.nodeId(inst[ANCHOR]);
+    if (anchorId !== undefined) { map.set(anchorId, strings.anchor); ids.push(anchorId); }
+    const sigs = plan.signals;
+    for (let i = 0; i < sigs.length; i++) {
+        const id = reg.nodeId(inst[sigs[i].slot]);
+        if (id !== undefined) { map.set(id, strings.signals[i]); ids.push(id); }
+    }
+    const ders = plan.deriveds;
+    for (let i = 0; i < ders.length; i++) {
+        const id = reg.nodeId(inst[ders[i].slot]);
+        if (id !== undefined) { map.set(id, strings.deriveds[i]); ids.push(id); }
+    }
+    if (effHandles !== null) {
+        for (let i = 0; i < effHandles.length; i++) {
+            const id = reg.nodeId(effHandles[i]);
+            if (id !== undefined) { map.set(id, strings.effects[i]); ids.push(id); }
+        }
+    }
+    inst[LABEL_IDS] = ids;
+}
+
+function auditShape(plan) {
+    return `P=${plan.signals.length} D=${plan.deriveds.length} E=${plan.effects.length}`;
+}
+
+function auditFinalize(held) {
+    // held is a plain { className, shape } record -- it never references the
+    // (now-collected) instance, so the FR cannot itself retain what it watches.
+    console.error(
+        `${ERR}auditReactive: an instance of ${held.className} (${held.shape}) was garbage-collected without disposeReactive() -- its reactive graph was reclaimed by GC, not by you. Dispose at end of life: disposeReactive(vm), or a \`using\` block.`,
+    );
+}
+
+// Wiring-time introspection (S4): only reached when INTROSPECT_ON. Registers
+// per-node labels (while LABELS_ON) and the audit FR entry (while AUDIT_ON).
+function introspectWire(inst, plan, reg, effHandles) {
+    if (LABELS_ON) registerLabels(inst, plan, reg, effHandles);
+    if (AUDIT_ON && AUDIT_FR !== null) {
+        AUDIT_FR.register(inst, { className: plan.ctorName, shape: auditShape(plan) }, inst);
+    }
+}
+
+// Dispose-time introspection (S4): only reached when INTROSPECT_ON. Drops this
+// instance's label entries and unregisters it from the audit FR.
+function introspectDispose(vm, reg) {
+    const ids = vm[LABEL_IDS];
+    if (ids !== undefined) {
+        const map = LABEL_MAPS.get(reg);
+        if (map !== undefined) for (let i = 0; i < ids.length; i++) map.delete(ids[i]);
+        vm[LABEL_IDS] = undefined;
+    }
+    if (AUDIT_FR !== null) AUDIT_FR.unregister(vm);
+}
+
+/**
+ * Toggle devtools labels (default OFF). While ON, wiring registers a
+ * `nodeId -> "Class.prop" / "Class#method" / "Class@anchor"` label for every
+ * node an instance creates, into a per-registry map; `disposeReactive`
+ * unregisters them. OFF adds no hot-path cost (the accessor canon is untouched).
+ */
+export function enableLabels(on) {
+    if (typeof on !== "boolean") throwFlagArg("enableLabels");
+    LABELS_ON = on;
+    INTROSPECT_ON = LABELS_ON || AUDIT_ON;
+}
+
+/**
+ * Resolve a node id (or a handle, via the registry's `nodeId`) to its label, or
+ * `undefined` if unlabeled/unknown -- an introspection miss is never an error.
+ * `registry` defaults to the default registry; pass a custom `Registry` to look
+ * up nodes it owns.
+ */
+export function labelOf(idOrHandle, registry) {
+    const reg = registry === undefined || registry === null ? DEFAULT_REG : registry;
+    if (typeof reg !== "object" || reg === null) return undefined;
+    let id;
+    if (typeof idOrHandle === "number") {
+        id = idOrHandle;
+    } else if (idOrHandle !== null && typeof idOrHandle === "object" && typeof reg.nodeId === "function") {
+        id = reg.nodeId(idOrHandle);
+        if (id === undefined) return undefined;
+    } else {
+        return undefined;
+    }
+    const map = LABEL_MAPS.get(reg);
+    if (map === undefined) return undefined;
+    return map.get(id);
+}
+
+/**
+ * Toggle the leak auditor (default OFF). While ON, a lazily-created
+ * FinalizationRegistry reports (one `console.error`) any instance that is
+ * garbage-collected WITHOUT `disposeReactive` -- naming the class + shape. OFF:
+ * no FinalizationRegistry exists and nothing is registered.
+ */
+export function auditReactive(on) {
+    if (typeof on !== "boolean") throwFlagArg("auditReactive");
+    if (on && AUDIT_FR === null && typeof FinalizationRegistry === "function") {
+        AUDIT_FR = new FinalizationRegistry(auditFinalize);
+    }
+    AUDIT_ON = on;
+    INTROSPECT_ON = LABELS_ON || AUDIT_ON;
+}
+
 // --- Version ------------------------------------------------------------------
 
 /** Package version. Kept in lockstep with package.json and llms.txt. */
-export const VERSION = "0.3.0";
+export const VERSION = "0.4.0";

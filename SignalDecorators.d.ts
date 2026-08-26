@@ -11,6 +11,8 @@ import type {
     ComputedBox,
     NodeDescriptor,
     Registry,
+    RegistryConfig,
+    ReactiveHandle,
     EffectScheduler,
 } from "@zakkster/lite-signal";
 
@@ -256,6 +258,97 @@ export function boxOf<T = unknown>(vm: object, key: PropertyKey): SignalBox<T> |
  */
 export function rootOf(vm: object): NodeDescriptor;
 
+// --- Introspection & audit (S4) -----------------------------------------------
+
+/** The measured per-instance cost of a reactive class, returned by {@link costOf}. */
+export interface ReactiveCost {
+    /** Total nodes = `signals + deriveds + effects + 1` (the anchor). */
+    nodes: number;
+    /** Dependency links held after every `@derived` has been read once (0007). */
+    links: number;
+    /** Count of `@reactive` members. */
+    signals: number;
+    /** Count of `@derived` members. */
+    deriveds: number;
+    /** Count of `@reactiveEffect` members. */
+    effects: number;
+}
+
+/**
+ * Measure the settled per-instance cost of a reactive class on its bound
+ * registry. Constructs a probe instance (with NO arguments), reads every
+ * `@derived` once to force the lazy links, disposes, and verifies the registry
+ * floor -- twice, requiring identical deltas. The result is frozen and cached
+ * per class.
+ *
+ * @param Factory the class returned by `@reactiveHost` or `defineReactive`.
+ * @throws if `Factory` is not a reactive wrapper class, if the two probes
+ *   disagree (a data-dependent read or a polluted registry -- costOf never
+ *   guesses), or if dispose does not return the registry to its floor.
+ */
+export function costOf(Factory: new (...args: any[]) => any): Readonly<ReactiveCost>;
+
+/** A `[Factory, count]` pair for {@link capacityFor}. */
+export type InventoryEntry = [new (...args: any[]) => any, number];
+
+/** Options for {@link capacityFor}. */
+export interface CapacityForOptions {
+    /**
+     * Link-budget multiplier (`>= 1`, default `1` = exact). Applied to the link
+     * total for workloads with dynamic-dependency (branchy) deriveds whose active
+     * branch can read more members than the probe measured. See decisions/0007.
+     */
+    headroom?: number;
+}
+
+/**
+ * Size a `createRegistry` config for a stated inventory of `[Factory, count]`
+ * pairs. Nodes are exact; links are `sum(cost.links x count)` scaled by
+ * `headroom`. Returns a ready `RegistryConfig` with `prealloc: "eager"` and
+ * `onCapacityExceeded: "throw"`.
+ *
+ * @throws on an empty inventory, a non-factory entry, a non-positive/non-integer
+ *   count, or a bad `headroom`.
+ */
+export function capacityFor(
+    inventory: InventoryEntry[],
+    options?: CapacityForOptions,
+): RegistryConfig;
+
+/**
+ * Toggle devtools labels (default OFF). While ON, wiring registers a
+ * `nodeId -> label` for every node an instance creates (`"Class.prop"`,
+ * `"Class#method"`, `"Class@anchor"`) into a per-registry map, and
+ * `disposeReactive` unregisters them. OFF adds no hot-path cost.
+ *
+ * @throws if `on` is not a boolean.
+ */
+export function enableLabels(on: boolean): void;
+
+/**
+ * Resolve a node id (or a handle, via the registry's `nodeId`) to its label, or
+ * `undefined` if unlabeled/unknown -- an introspection miss is never an error.
+ * `registry` defaults to the default registry.
+ */
+export function labelOf(
+    idOrHandle: number | ReactiveHandle | NodeDescriptor,
+    registry?: Registry,
+): string | undefined;
+
+/**
+ * Toggle the leak auditor (default OFF). While ON, a lazily-created
+ * `FinalizationRegistry` reports (one `console.error`) any instance
+ * garbage-collected WITHOUT `disposeReactive`, naming the class + shape. OFF: no
+ * `FinalizationRegistry` exists and nothing is registered.
+ *
+ * Note: an instance pinned by its own undisposed derived/effect nodes on a
+ * long-lived registry is never collected, so audit cannot fire for it -- that
+ * retention is caught by leak torture instead (see decisions/0008).
+ *
+ * @throws if `on` is not a boolean.
+ */
+export function auditReactive(on: boolean): void;
+
 // --- Errors -------------------------------------------------------------------
 
 /**
@@ -273,4 +366,4 @@ export class ReactiveDisposedError extends Error {
 // --- Version ------------------------------------------------------------------
 
 /** Package version. Kept in lockstep with package.json and llms.txt. */
-export const VERSION: "0.3.0";
+export const VERSION: "0.4.0";

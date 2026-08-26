@@ -41,9 +41,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SKIP_EXIT = 77;
 const INFRA_EXIT = 78;
 
-// Scenario table. Every scenario floors at 1.5.0 (signalBox/computedBox + owner
-// descriptors); the `semantic` group is the correctness lane, `soak` the
-// wall-clock resource lane (churn-soak + fleet-soak).
+// Scenario table. Most scenarios floor at 1.5.0 (signalBox/computedBox + owner
+// descriptors); the two forward-compat scenarios floor higher (scope-adoption
+// 1.6.0 for createScope, using-dispose 1.9.0 for the engine [Symbol.dispose]
+// stamp) and SKIP (77) below their floor. The `semantic` group is the
+// correctness lane, `soak` the wall-clock resource lane (churn-soak +
+// fleet-soak).
 const SCENARIOS = [
     { name: "emit-matrix", file: "emit-matrix.mjs", group: "semantic", floor: "1.5.0", about: "fixture-hash freshness + L-law consequences on both emits" },
     { name: "ordering-torture", file: "ordering-torture.mjs", group: "semantic", floor: "1.5.0", about: "PRNG shapes + full PD-8 rejection matrix" },
@@ -56,6 +59,8 @@ const SCENARIOS = [
     { name: "oracle-fuzzer", file: "oracle-fuzzer.mjs", group: "semantic", floor: "1.5.0", about: "seeded shape fuzzer: decorated vs raw twin, values + fires + opcode tallies" },
     { name: "interop-torture", file: "interop-torture.mjs", group: "semantic", floor: "1.5.0", about: "decorated <-> raw in one graph + cross-registry + P-2 documented limits" },
     { name: "batch-untrack-torture", file: "batch-untrack-torture.mjs", group: "semantic", floor: "1.5.0", about: "@batched nesting/unwind + untrack dep-suppression + peek adds no edge" },
+    { name: "scope-adoption", file: "scope-adoption.mjs", group: "semantic", floor: "1.6.0", about: "forward-compat: createScope adoption alongside a decorated instance -- our P+D+E+1 cascade/poison hold, bare boxes unadopted, one graph zero interference" },
+    { name: "using-dispose", file: "using-dispose.mjs", group: "semantic", floor: "1.9.0", about: "forward-compat: engine [Symbol.dispose]/using over handles + disposeReactive interop -- idempotent double-dispose, poison lands, conservation exact" },
     { name: "churn-soak", file: "churn-soak.mjs", group: "soak", floor: "1.5.0", about: "wall-clock construct/use/dispose soak: F-0 + flat heap + gcGate 0" },
     { name: "fleet-soak", file: "fleet-soak.mjs", group: "soak", floor: "1.5.0", about: "10s 2k-VM fleet tick + partial churn rotations: F-0 samples, flat heap, gcGate 0" },
 ];

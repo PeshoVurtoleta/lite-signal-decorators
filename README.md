@@ -240,12 +240,23 @@ Symbol keys work (`Reflect.ownKeys`). A spec key colliding with an own property 
 | `boxOf` | `(vm, key) => SignalBox \| ComputedBox` | The live engine box behind a `@reactive`/`@derived` member -- `.peek()`, `.subscribe()`, raw interop. Unknown key: named throw with a did-you-mean. After dispose: `ReactiveDisposedError`. |
 | `rootOf` | `(vm) => NodeDescriptor` | The instance's anchor descriptor -- feeds `forEachOwned` and lite-devtools. Throws `ReactiveDisposedError` after dispose. |
 
+### Introspection & audit (0.4.0)
+
+| Export | Signature | Behavior |
+|---|---|---|
+| `costOf` | `(Factory) => { nodes, links, signals, deriveds, effects }` | The measured, settled per-instance cost, probed on the class's bound registry (frozen result, cached per class). Double-probed: an inconclusive or polluted probe THROWS -- never a guess. `nodes` is exactly P + D + E + 1; `links` is the first-full-read link count. |
+| `capacityFor` | `(inventory, { headroom }?) => RegistryConfig` | Sizes a `createRegistry` config from `[Factory, count]` pairs: nodes exact, links x `headroom` (floored at the engine minimum of 1), `prealloc: "eager"`, `onCapacityExceeded: "throw"`. Fail-closed inventory and options validation. Link policy + caveats: [decisions/0007](decisions/0007-capacity-policy.md). |
+| `enableLabels` / `labelOf` | `(on)` / `(idOrHandle, registry?) => string \| undefined` | Opt-in devtools identity (default OFF): while on, wiring registers per-registry `nodeId -> "Class.prop"` / `"Class#method"` / `"Class@anchor"`; dispose unregisters. `labelOf` misses return `undefined`, never throw. |
+| `auditReactive` | `(on)` | Opt-in leak auditor (default OFF): a lazily-created `FinalizationRegistry` reports any instance collected WITHOUT `disposeReactive`, naming class and shape. Holds no instance references itself; zero cost and zero registrations while off. |
+
+With labels and audit off, the zero-GC budgets are byte-identical to 0.3.0 -- the hot accessor canon is untouched by all four (review-diffed against the published 0.3.0 tarball).
+
 ### Errors & constants
 
 | Export | Value |
 |---|---|
 | `ReactiveDisposedError` | `extends Error`; `name: "ReactiveDisposedError"`; fields `className`, `key`. Thrown on ANY touch of a disposed instance's surface. |
-| `VERSION` | `"0.3.0"` |
+| `VERSION` | `"0.4.0"` |
 
 ### The rejection matrix
 
@@ -473,7 +484,7 @@ Because an instance whose base-class boxes live in one pool and whose subclass b
 No, and the README says so with numbers: 22.12 ns/op vs 15.25 raw vs 11.67 unbatched on the reference rig -- a thunk + rest-array per call. Use it for actions; keep per-frame writes on plain accessors.
 
 **Where are `costOf`, labels, the audit hook, private members?**
-Not in 0.3.0 -- the runtime surface froze for 0.x at 0.2.0, and the introspection layer (capacity accounting, devtools identity) is the 0.4.0 milestone. The `llms.txt` scope note tracks exactly what is and isn't included.
+The first three landed in 0.4.0 -- `costOf`/`capacityFor` (measured capacity accounting), `enableLabels`/`labelOf` (devtools identity), and `auditReactive` (leak audit), all cold-path or opt-in with the hot canon untouched. Private-member support remains out. The `llms.txt` scope note tracks exactly what is and isn't included.
 
 ---
 

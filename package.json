@@ -1,6 +1,6 @@
 {
   "name": "@zakkster/lite-signal-decorators",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Stage-3 decorator layer over @zakkster/lite-signal. The reactive class layer where an instance has a measured cost, deterministic teardown, and a churn benchmark.",
   "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>",
   "license": "MIT",
@@ -66,6 +66,7 @@
     "torture:semantic": "node test/torture/run.mjs --group semantic",
     "torture:soak": "node test/torture/run.mjs --group soak",
     "torture:controls": "node test/torture/run.mjs --controls",
+    "torture:peer-preview": "node test/torture/peer-preview.mjs",
     "spikes": "for f in spikes/*.mjs; do echo \"== $f ==\"; node --expose-gc \"$f\" || exit 1; done",
     "spike:emit": "node --expose-gc spikes/emit/probe.mjs",
     "spike:ownership": "node --expose-gc spikes/ownership.mjs",
@@ -82,6 +83,7 @@
     "@babel/core": "^7.25.0",
     "@babel/plugin-proposal-decorators": "^7.25.0",
     "@babel/preset-typescript": "^7.29.7",
+    "@zakkster/lite-devtools": "^1.4.0",
     "@zakkster/lite-gc-profiler": "^1.16.0",
     "@zakkster/lite-leak": "^1.10.0",
     "@zakkster/lite-signal": "1.5.0",
