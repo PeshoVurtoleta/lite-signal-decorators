@@ -1,15 +1,58 @@
 {
   "name": "@zakkster/lite-signal-decorators",
-  "version": "0.0.0",
-  "private": true,
-  "description": "S0 spike phase -- not yet published. The reactive class layer where an instance has a measured cost, deterministic teardown, and a churn benchmark.",
+  "version": "0.1.0",
+  "description": "Stage-3 decorator layer over @zakkster/lite-signal. The reactive class layer where an instance has a measured cost, deterministic teardown, and a churn benchmark.",
   "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>",
   "license": "MIT",
   "type": "module",
+  "main": "./SignalDecorators.js",
+  "module": "./SignalDecorators.js",
+  "types": "./SignalDecorators.d.ts",
+  "exports": {
+    ".": {
+      "types": "./SignalDecorators.d.ts",
+      "node": "./SignalDecorators.js",
+      "import": "./SignalDecorators.js",
+      "default": "./SignalDecorators.js"
+    }
+  },
+  "sideEffects": false,
   "engines": {
     "node": ">=18"
   },
+  "keywords": [
+    "signal",
+    "signals",
+    "reactive",
+    "reactivity",
+    "decorators",
+    "stage-3",
+    "computed",
+    "derived",
+    "class",
+    "view-model",
+    "zero-gc",
+    "zero-allocation",
+    "dispose",
+    "lifecycle",
+    "lite-signal"
+  ],
+  "files": [
+    "SignalDecorators.js",
+    "SignalDecorators.d.ts",
+    "llms.txt",
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
+    "test": "node --test --test-reporter=spec 'test/*.test.mjs'",
+    "test:gc": "node --expose-gc --test --test-reporter=spec 'test/*.test.mjs'",
+    "fixtures": "node test/fixtures/regen.mjs",
+    "torture": "node test/torture/run.mjs",
+    "torture:semantic": "node test/torture/run.mjs --group semantic",
+    "torture:soak": "node test/torture/run.mjs --group soak",
+    "torture:controls": "node test/torture/run.mjs --controls",
     "spikes": "for f in spikes/*.mjs; do echo \"== $f ==\"; node --expose-gc \"$f\" || exit 1; done",
     "spike:emit": "node --expose-gc spikes/emit/probe.mjs",
     "spike:ownership": "node --expose-gc spikes/ownership.mjs",
@@ -30,6 +73,5 @@
     "@zakkster/lite-leak": "^1.10.0",
     "@zakkster/lite-signal": "1.5.0",
     "typescript": "^5.6.0"
-  },
-  "sideEffects": false
+  }
 }

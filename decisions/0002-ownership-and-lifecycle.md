@@ -122,6 +122,43 @@ scenarios prove F-0 on the DEFAULT registry via bounded-live churn; fleet-scale
 node-count scenarios use a sized registry. This is exactly what `capacityFor`
 (S4) automates.
 
+### D-2f -- dispose re-entrancy guard (added 0.1.0, S1 QA finding).
+
+QA (`test/07-qa-boundary.test.mjs`, case 277) found a fail-open hole: a
+`@derived` getter whose body calls `disposeReactive(this)` returned
+`undefined` for that read, silently. Repro: the read enters the derived's
+`boxComputedGet`, the body cascades the anchor via `disposeCore`, the derived's
+own node is recycled (gen bump), and on return `boxComputedGet` sees the
+generation mismatch and discards the freshly computed value. No throw, no
+value -- a silent drop.
+
+Ruling (fail-closed law): a graph self-mutation from inside one's own
+derivation is a USER ERROR and must throw named. Derived getters must be pure.
+The 0004 precedent -- a documented caveat is not acceptable when a near-free
+fix exists -- applies: we throw rather than paper over it in the README.
+
+Mechanism (chosen on alloc profile; verified in `Signal.js`: `isTracking()` and
+`nodeId()` are alloc-free, `getOwner()` allocates one descriptor per call):
+`disposeReactive`, after the not-wired check and BEFORE `disposeCore`, gates on
+`isTracking()`. When false (the plain-code and effect-driven dispose paths) the
+path is byte-identical to D-2d and zero-alloc. When true, it pays ONE
+`getOwner()` descriptor and scans the plan's deriveds for a live box whose
+`nodeId` equals the current owner's `id`; a match throws
+`throwSelfDisposeInDerived(ctorName, key)`. No guard lives in `disposeCore` (the
+wiring-failure path runs no user code) and the hot bodies are untouched.
+
+Cost profile: zero on the untracked dispose path (the common case, D-2d holds);
+one `getOwner()` descriptor allocation under an active tracking context (rare --
+e.g. a manager effect disposing children, which remains legal and proceeds).
+
+Two limits, queued to S2b interop-torture, remain engine-level silent-drop
+territory until deeper support exists:
+(a) an INDIRECT self-dispose routed through an intermediate raw-engine computed
+    is NOT caught -- `getOwner()` sees only the innermost computation, whose id
+    is the raw computed, not our derived;
+(b) wrapping the call in `untrack()` bypasses the `isTracking()` gate entirely.
+`@reactiveEffect` self-dispose semantics are an S2a decision, out of scope here.
+
 ## Consequences
 
 - One anchor per instance; `rootOf(vm)` returns the anchor handle and feeds

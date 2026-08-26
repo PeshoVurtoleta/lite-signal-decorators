@@ -1,0 +1,11 @@
+{
+  "babel-legacy-out/legacy.src.js": "1d35a02c57ceff727cf667db5c6793298c1f5a40ac3ce4a4d013bfa0e0eb80f4",
+  "babel-out/fixture.src.js": "dff4a56a13d9be44b4fe5e7112e2e7ca96726bcdb4f05bf338b2e6dfe323b8ea",
+  "babel-out/static.src.js": "dc936c5aa2352332f6de199bd94611dede6c4cb66acc6359abd4a43500f6fa0a",
+  "src/fixture.src.ts": "b8ebdac0c7cfe134bdd851ca405cb3ca658d04090bd89ba99c19882e493c3ef8",
+  "src/legacy.src.ts": "30ac3dabaf7c01c6cec989eda414f4c94369159a36d4f5211e61843c06b51562",
+  "src/static.src.ts": "81fb649965e6a2ebdb1767956d6549c29cb4a177b39adc30a4a2b95b8539fa92",
+  "ts-legacy-out/legacy.src.js": "c1059b1d37b104995ee319e5d04ac3d5e1aeca744907ddc251a9fb0196848571",
+  "ts-out/fixture.src.js": "8f2ef64c81b611d4f05312013651379a3a43ced5c498c9af0b2f2edba7ce66b5",
+  "ts-out/static.src.js": "d2a03e3d5f707c2dbdaef71dd85cbe70fe67b914dd6ee8c21881358def46edc8"
+}

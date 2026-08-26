@@ -1,0 +1,66 @@
+# @zakkster/lite-signal-decorators
+
+VERSION 0.1.0
+
+> Stage-3 decorator layer over @zakkster/lite-signal. Turns a plain class into a
+> reactive view-model where each instance has a measured per-property cost, a
+> single deterministic teardown, and poison-on-dispose safety. ESM-only, zero
+> runtime dependencies beyond the peer. The accessor read/write bodies carry one
+> slot load + one monomorphic box call -- zero branches, zero allocation.
+
+A `@reactive accessor` becomes a per-instance signal box stored in a unique
+symbol slot. A `@derived get` becomes a lazy computed owned by the instance's
+anchor. `@reactiveHost` is the one place wiring happens -- its most-derived
+constructor builds the anchor and every derived exactly once, after all fields
+initialize. `disposeReactive` cascades that anchor, disposes each signal box,
+and swaps every slot for a poison handle, so any later read/write throws a named
+`ReactiveDisposedError`.
+
+## Exports (8)
+
+- `reactive` -- `@reactive accessor x = v` (bare) or `@reactive({ equals })`
+  (factory). Declares a per-instance signal.
+- `derived` -- `@derived get y()` (bare) or `@derived({ equals })` (factory).
+  Declares a lazy computed derived from other reactive members.
+- `reactiveHost` -- `@reactiveHost` (bare) or `@reactiveHost()` (factory). The
+  single wiring site; wraps the class. No options in 0.1.0.
+- `disposeReactive(vm) -> boolean` -- cascade + poison teardown. Idempotent: a
+  second call returns `false` and changes nothing.
+- `boxOf(vm, key) -> SignalBox | ComputedBox` -- the live box behind a member;
+  throws with a did-you-mean on an unknown key, `ReactiveDisposedError` after
+  dispose.
+- `rootOf(vm) -> NodeDescriptor` -- the instance's anchor descriptor; feeds
+  `forEachOwned` / lite-devtools. Throws `ReactiveDisposedError` after dispose.
+- `ReactiveDisposedError` -- `extends Error`, `name` `"ReactiveDisposedError"`,
+  fields `className` and `key`.
+- `VERSION` -- `"0.1.0"`.
+
+## Disposal law
+
+One anchor per instance owns all deriveds; signal boxes are created bare (not
+adopted) and disposed explicitly. `disposeReactive` (or a `using` block via
+`Symbol.dispose`) is the only lifecycle owner. Dispose is allocation-free on the
+success path and idempotent. After dispose, every member touch, `boxOf`, and
+`rootOf` throw `ReactiveDisposedError` naming `Class.key`. Calling
+`disposeReactive(this)` from inside the instance's own `@derived` computation
+throws a named error -- derived getters must be pure; dispose from an effect, a
+subscription, or plain code instead.
+
+## Rejections (all named, all fail-closed, all at decoration time)
+
+Legacy emit, wrong decorator kind, static members, private (#) members, unknown
+option keys (with a nearest-key did-you-mean), non-function `equals`, double
+`@reactiveHost`, host options, and orphaned members (reactive members whose
+class never got `@reactiveHost`) each throw a named error.
+
+## Peer range
+
+Requires `@zakkster/lite-signal` `>=1.5.0 <2.0.0` (peer dependency). Uses
+`signalBox`, `computedBox`, `effect`, `createRoot`, `getOwner`, `runWithOwner`,
+and `dispose` from it.
+
+## Scope note
+
+0.1.0 ships the decorator core. Not yet included: `@reactiveEffect`, `batched`,
+`defineReactive` (buildless co-export), sized-registry host options, cost
+introspection, labels, and private-member support.
