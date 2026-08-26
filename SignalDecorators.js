@@ -1,5 +1,5 @@
 /**
- * @zakkster/lite-signal-decorators v0.2.0
+ * @zakkster/lite-signal-decorators v0.3.0
  * --------------------
  * Stage-3 decorator layer over @zakkster/lite-signal. Turns a plain class into
  * a reactive view-model with measured per-instance cost and deterministic
@@ -1298,4 +1298,4 @@ export function rootOf(vm) {
 // --- Version ------------------------------------------------------------------
 
 /** Package version. Kept in lockstep with package.json and llms.txt. */
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";

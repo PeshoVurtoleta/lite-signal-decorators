@@ -10,7 +10,7 @@ lite-signal pool cannot poison the next one's baseline.
 ```
 node test/torture/run.mjs                    # every scenario
 node test/torture/run.mjs --group semantic   # correctness lane (CI)
-node test/torture/run.mjs --group soak       # resource soaks (empty in 0.1.0)
+node test/torture/run.mjs --group soak       # resource soaks (churn-soak + fleet-soak)
 node test/torture/run.mjs --list             # show the table and exit
 node test/torture/run.mjs --bail             # stop at the first failure
 node test/torture/run.mjs --lenient          # floor-escalation FAIL -> WARN
@@ -60,6 +60,7 @@ gate for any control that still exits 0 (a gate that cannot fail is not a gate).
 | interop-torture       | wraps the cross-registry pin in a softening try/catch (the raw-contract assertion catches it) |
 | batch-untrack-torture | replaces one `peek` with a tracked get (the zero-edge re-run count catches it) |
 | churn-soak            | leaks one instance per 1024 cycles (F-0 / flat-heap sample catches it) |
+| fleet-soak            | leaks one VM per churn rotation (skips its dispose; the F-0 sample catches the off-floor node count) |
 
 ## TORTURE_SEED -- replay
 
@@ -87,8 +88,9 @@ TORTURE_SEED=12345 node --expose-gc test/torture/ordering-torture.mjs
 | interop-torture   | semantic | 1.5.0 | decorated <-> raw in one graph (both directions) + cross-registry raw-contract pins + registry.destroy() mid-life + P-2 documented limits (indirect self-dispose, untrack-wrapped) |
 | batch-untrack-torture | semantic | 1.5.0 | @batched nesting/flush-at-outermost + exception unwind + `boxOf(...).peek()` adds no edge + untrack() dep suppression + manual guarded calls in batches |
 | churn-soak        | soak     | 1.5.0 | wall-clock construct/use/dispose soak (`--seconds`): F-0 at each ~1s sample, retained heap flat, gcGate maxMajor 0 across the soak |
+| fleet-soak        | soak     | 1.5.0 | wall-clock FLEET-TICK soak (`--seconds`): a standing 2000-VM fleet (P=4/D=2/E=1, decorated + defineReactive halves) on a dedicated `createRegistry({ maxNodes: 16384, onCapacityExceeded: "throw" })`; every tick writes one field of a rotating VM and reads its derived, each ~1s sample runs a 128-VM partial churn rotation, then asserts F-0 (activeNodes == 16000 exactly), flat retained heap, and effect-counter liveness -- gcGate maxMajor 0 across the soak |
 
-The `soak` group runs `churn-soak`; `--group soak` runs it alone.
+The `soak` group runs `churn-soak` + `fleet-soak`; `--group soak` runs them alone.
 
 ## S2a effect + registry lanes
 

@@ -273,4 +273,4 @@ export class ReactiveDisposedError extends Error {
 // --- Version ------------------------------------------------------------------
 
 /** Package version. Kept in lockstep with package.json and llms.txt. */
-export const VERSION: "0.2.0";
+export const VERSION: "0.3.0";

@@ -1,0 +1,98 @@
+# bench/results.txt -- the official class-reactivity matrix lands here.
+#
+# This file is APPENDED to by `npm run bench`: each run writes a machine #STAMP
+# (node, CPU, date, resolved adapter versions) followed by its aligned table.
+# The official stamped matrix is captured by the integrator on the reference rig
+# after re-review; until then this file holds only this preamble. Do NOT publish
+# any table that lacks a #STAMP line or whose run did not exit 0.
+# ==== BENCH STAMP v1 (machine-generated -- do not hand-edit) ====
+# date        : 2026-08-26T07:07:01.085Z
+# protocol    : isolated-per-engine  reps=5
+# host        : Apple M4 Pro  darwin/arm64  node v26.3.1  gc=on
+# engine      : /Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignalDecorators/SignalDecorators.js
+# engine.sha  : 5543bee8b23fe8b196c51dda7463deb8d55307512f915d395bb5a3355b9862eb
+# harness     : /Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignalDecorators/bench/benchmark.mjs
+# harness.sha : 4524b3d77c7fa005bddc936c9318aa508127914e433290de78d1e0494a65d99b
+# config      : {"mode":"class-reactivity microscope","warmup":2,"runs":5,"quick":false}
+# extra       : {"adapters":{"lsd":"0.3.0","lsd-define":"0.3.0","lite-raw-boxes":"1.5.0","mobx":"7.0.3","signal-utils":"0.21.1 (+signal-polyfill 0.2.2)","alien-class":"3.2.1"},"scenarios":["vm-write","fleet-read","fleet-tick","cascade","deep-vm","churn","retention"]}
+# ================================================================
+#STAMP {"kind":"bench-stamp/v1","date":"2026-08-26T07:07:01.085Z","protocol":"isolated-per-engine","reps":5,"node":"v26.3.1","arch":"arm64","platform":"darwin","cpu":"Apple M4 Pro","gcExposed":true,"enginePath":"/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignalDecorators/SignalDecorators.js","engineSha256":"5543bee8b23fe8b196c51dda7463deb8d55307512f915d395bb5a3355b9862eb","harnessPath":"/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignalDecorators/bench/benchmark.mjs","harnessSha256":"4524b3d77c7fa005bddc936c9318aa508127914e433290de78d1e0494a65d99b","config":{"mode":"class-reactivity microscope","warmup":2,"runs":5,"quick":false},"extra":{"adapters":{"lsd":"0.3.0","lsd-define":"0.3.0","lite-raw-boxes":"1.5.0","mobx":"7.0.3","signal-utils":"0.21.1 (+signal-polyfill 0.2.2)","alien-class":"3.2.1"},"scenarios":["vm-write","fleet-read","fleet-tick","cascade","deep-vm","churn","retention"]}}
+# EXCLUDED  classy-solid        reactivity is dead in stock Node -- solid-js's default Node resolution is its non-reactive SSR build and classy-solid imports `solid-js` internally (no deep-import escape), so live class reactivity requires running the whole process under `--conditions=browser`, a non-stock-Node run condition (PD-16).
+# EXCLUDED  reactively          @reactively/decorate ships only legacy (experimentalDecorators) decorators -- signature (proto, key, descriptor) returning a descriptor -- which the standard-2023-11 bench emitter cannot drive, and the package exposes no documented non-decorator class API.
+Config: WARMUP=2  RUNS=5  QUICK=false  gc=on
+
+--------------------------------------------------------------------------------------------------------------
+vm-write   shape={"P":4,"D":2}   iters=2000000
+--------------------------------------------------------------------------------------------------------------
+lsd                   median=   53.41ms min=   52.54ms ops/s=37448K  heapMed= 119.9KB  heapP95= 144.4KB  retained= 0.0KB    sink=ok
+lsd-define            median=   69.50ms min=   53.50ms ops/s=28777K  heapMed= 110.7KB  heapP95= 147.8KB  retained= 0.0KB    sink=ok
+lite-raw-boxes        median=   56.66ms min=   52.24ms ops/s=35296K  heapMed= 623.4KB  heapP95= 626.5KB  retained= 0.0KB    sink=ok
+mobx                  median=  291.44ms min=  290.88ms ops/s=6862K   heapMed= 270.3KB  heapP95= 1145.5KB retained= 0.0KB    sink=ok
+signal-utils          median=  256.64ms min=  246.48ms ops/s=7793K   heapMed= 716.1KB  heapP95= 767.7KB  retained= 0.3KB    sink=ok
+alien-class           median=   45.68ms min=   44.72ms ops/s=43784K  heapMed= 12.6KB   heapP95= 479.6KB  retained= 0.0KB    sink=ok
+
+--------------------------------------------------------------------------------------------------------------
+fleet-read   shape={"P":4,"D":2,"VMs":10000}   iters=2000000
+--------------------------------------------------------------------------------------------------------------
+lsd                   median=   29.72ms min=   26.84ms ops/s=67293K  heapMed= 430.3KB  heapP95= 708.7KB  retained= 0.0KB    sink=ok
+lsd-define            median=   27.91ms min=   26.99ms ops/s=71647K  heapMed= 307.0KB  heapP95= 321.0KB  retained= 0.0KB    sink=ok
+lite-raw-boxes        median=   26.93ms min=   26.18ms ops/s=74274K  heapMed= 535.3KB  heapP95= 631.7KB  retained= 0.0KB    sink=ok
+mobx                  median=  209.37ms min=  206.31ms ops/s=9552K   heapMed= 31935.1KB heapP95= 32521.9KB retained= 0.0KB    sink=ok
+signal-utils          median=   69.66ms min=   66.26ms ops/s=28710K  heapMed= 7839.8KB heapP95= 8195.5KB retained= 0.0KB    sink=ok
+alien-class           median=   24.55ms min=   24.07ms ops/s=81456K  heapMed= 1562.9KB heapP95= 2194.5KB retained= 0.0KB    sink=ok
+
+--------------------------------------------------------------------------------------------------------------
+fleet-tick   shape={"P":4,"D":2,"VMs":10000}   iters=1000000
+--------------------------------------------------------------------------------------------------------------
+lsd                   median=   81.15ms min=   76.71ms ops/s=12323K  heapMed= 300.8KB  heapP95= 413.4KB  retained= 0.0KB    sink=ok
+lsd-define            median=   82.00ms min=   80.55ms ops/s=12194K  heapMed= 329.1KB  heapP95= 359.7KB  retained= 0.0KB    sink=ok
+lite-raw-boxes        median=   67.55ms min=   65.22ms ops/s=14803K  heapMed= 546.8KB  heapP95= 588.6KB  retained= 0.0KB    sink=ok
+mobx                  median=  166.82ms min=  165.05ms ops/s=5994K   heapMed= 14502.4KB heapP95= 14570.8KB retained= 0.0KB    sink=ok
+signal-utils          median=  155.32ms min=  146.70ms ops/s=6438K   heapMed= 8205.9KB heapP95= 8792.3KB retained= 0.0KB    sink=ok
+alien-class           median=   40.95ms min=   40.13ms ops/s=24418K  heapMed= 1562.9KB heapP95= 1599.4KB retained= 0.0KB    sink=ok
+
+--------------------------------------------------------------------------------------------------------------
+cascade   shape={"P":64,"D":16,"group":4,"aggregate":true}   iters=500000
+--------------------------------------------------------------------------------------------------------------
+lsd                   median=  234.87ms min=  231.73ms ops/s=2128K   heapMed= 51.1KB   heapP95= 94.3KB   retained= 0.0KB    sink=ok
+lsd-define            median=  239.40ms min=  234.50ms ops/s=2088K   heapMed= 72.5KB   heapP95= 91.9KB   retained= 0.0KB    sink=ok
+lite-raw-boxes        median=  101.47ms min=   99.98ms ops/s=4927K   heapMed= 546.0KB  heapP95= 585.6KB  retained= 0.0KB    sink=ok
+mobx                  median= 2974.53ms min= 2951.51ms ops/s=168K    heapMed= 26627.4KB heapP95= 27461.2KB retained= 0.0KB    sink=ok
+signal-utils          median= 1420.99ms min= 1414.38ms ops/s=351K    heapMed= 443.7KB  heapP95= 738.2KB  retained= 0.0KB    sink=ok
+alien-class           median=  105.53ms min=  103.68ms ops/s=4738K   heapMed= 155.0KB  heapP95= 161.2KB  retained= 0.0KB    sink=ok
+
+--------------------------------------------------------------------------------------------------------------
+deep-vm   shape={"P":1,"depth":64}   iters=500000
+--------------------------------------------------------------------------------------------------------------
+lsd                   median= 1261.15ms min= 1226.20ms ops/s=396K    heapMed= 84.1KB   heapP95= 117.0KB  retained= 0.0KB    sink=ok
+lsd-define            median= 1274.84ms min= 1243.17ms ops/s=392K    heapMed= 112.5KB  heapP95= 131.7KB  retained= 0.0KB    sink=ok
+lite-raw-boxes        median=  790.90ms min=  786.31ms ops/s=632K    heapMed= 38.7KB   heapP95= 62.7KB   retained= 0.0KB    sink=ok
+mobx                  median= 6557.15ms min= 6516.19ms ops/s=76K     heapMed= 2272.4KB heapP95= 5141.9KB retained= 0.0KB    sink=ok
+signal-utils          median= 2088.18ms min= 2059.19ms ops/s=239K    heapMed= 432.8KB  heapP95= 1015.1KB retained= 6.1KB    sink=ok
+alien-class           median=  557.94ms min=  554.23ms ops/s=896K    heapMed= 1044.5KB heapP95= 1073.2KB retained= 0.0KB    sink=ok
+
+--------------------------------------------------------------------------------------------------------------
+churn   shape={"P":4,"D":2,"E":1}   iters=200000
+--------------------------------------------------------------------------------------------------------------
+lsd                   median=  150.07ms min=  149.28ms ops/s=1332K   heapMed= 3707.2KB heapP95= 3759.0KB retained= 0.0KB    sink=ok
+lsd-define            median=  134.84ms min=  133.80ms ops/s=1483K   heapMed= 929.1KB  heapP95= 1026.1KB retained= 0.0KB    sink=ok
+lite-raw-boxes        median=  115.29ms min=  114.62ms ops/s=1734K   heapMed= 46729.1KB heapP95= 46819.8KB retained= 0.0KB    sink=ok
+mobx                  median=  548.57ms min=  538.07ms ops/s=364K    heapMed= 49842.3KB heapP95= 49954.4KB retained= 0.0KB    sink=ok
+signal-utils          median=  518.30ms min=  509.98ms ops/s=385K    heapMed= 19533.7KB heapP95= 21630.6KB retained= 0.0KB    sink=ok
+alien-class           median=   25.27ms min=   24.79ms ops/s=7914K   heapMed= 28764.4KB heapP95= 28799.6KB retained= 0.0KB    sink=ok
+
+--------------------------------------------------------------------------------------------------------------
+retention   shape={"P":4,"D":2,"E":1}   iters=4096
+--------------------------------------------------------------------------------------------------------------
+lsd                   cycles=4096   retainedDelta=-87.5KB   gc.major=0    gc.minor=0     sink=ok
+lsd-define            cycles=4096   retainedDelta=-146.7KB  gc.major=0    gc.minor=0     sink=ok
+lite-raw-boxes        cycles=4096   retainedDelta=-145.6KB  gc.major=0    gc.minor=0     sink=ok
+mobx                  cycles=4096   retainedDelta= 26.7KB   gc.major=0    gc.minor=1     sink=ok
+signal-utils          cycles=4096   retainedDelta= 108.5KB  gc.major=0    gc.minor=1     sink=ok
+alien-class           cycles=4096   retainedDelta= 0.6KB    gc.major=0    gc.minor=0     sink=ok
+
+Notes:
+  median/min = median-of-5 timed runs (min shown for spread); each run is GC-fenced.
+  heapMed/heapP95 = transient heap per timed run; retained = heap surviving a forced GC.
+  sink=ok means the summed anti-DCE sink matched the scenario's analytic oracle; REJECTED voids the lane.
+  retention reports retainedDelta + GC collection counts, not ops/s (PD-19).

@@ -11,7 +11,7 @@
 // Usage:
 //   node test/torture/run.mjs                    # every scenario
 //   node test/torture/run.mjs --group semantic   # correctness lane (CI)
-//   node test/torture/run.mjs --group soak       # resource soaks (churn-soak)
+//   node test/torture/run.mjs --group soak       # resource soaks (churn-soak + fleet-soak)
 //   node test/torture/run.mjs --list             # show the table and exit
 //   node test/torture/run.mjs --bail             # stop at the first failure
 //   node test/torture/run.mjs --lenient          # floor-escalation FAIL -> WARN
@@ -43,7 +43,7 @@ const INFRA_EXIT = 78;
 
 // Scenario table. Every scenario floors at 1.5.0 (signalBox/computedBox + owner
 // descriptors); the `semantic` group is the correctness lane, `soak` the
-// wall-clock resource lane (churn-soak).
+// wall-clock resource lane (churn-soak + fleet-soak).
 const SCENARIOS = [
     { name: "emit-matrix", file: "emit-matrix.mjs", group: "semantic", floor: "1.5.0", about: "fixture-hash freshness + L-law consequences on both emits" },
     { name: "ordering-torture", file: "ordering-torture.mjs", group: "semantic", floor: "1.5.0", about: "PRNG shapes + full PD-8 rejection matrix" },
@@ -57,6 +57,7 @@ const SCENARIOS = [
     { name: "interop-torture", file: "interop-torture.mjs", group: "semantic", floor: "1.5.0", about: "decorated <-> raw in one graph + cross-registry + P-2 documented limits" },
     { name: "batch-untrack-torture", file: "batch-untrack-torture.mjs", group: "semantic", floor: "1.5.0", about: "@batched nesting/unwind + untrack dep-suppression + peek adds no edge" },
     { name: "churn-soak", file: "churn-soak.mjs", group: "soak", floor: "1.5.0", about: "wall-clock construct/use/dispose soak: F-0 + flat heap + gcGate 0" },
+    { name: "fleet-soak", file: "fleet-soak.mjs", group: "soak", floor: "1.5.0", about: "10s 2k-VM fleet tick + partial churn rotations: F-0 samples, flat heap, gcGate 0" },
 ];
 
 // --- semver (hand-rolled triple compare; strip any -tag suffix) ---------------

@@ -4,6 +4,57 @@ All notable changes to `@zakkster/lite-signal-decorators` are documented here.
 The format follows Keep a Changelog; this project adheres to Semantic
 Versioning.
 
+## [0.3.0] - 2026-08-26
+
+The class-reactivity benchmark release. Zero runtime changes: the 11-export
+surface ships logic-identical to 0.2.0 (version constants aside); what this
+release adds is the proof. Stage gate, all measured at closeout: 171/171
+tests on both lanes; torture 13 scenarios / 13 sabotage controls all
+green-and-breakable; the full benchmark matrix 42/42 lanes `sink=ok`, exit 0.
+
+### Added
+
+- `bench/` -- a private, never-shipped benchmark sub-package: six admitted
+  engines (`lsd` decorators, `lsd-define` buildless, the `lite-raw-boxes`
+  honesty baseline, MobX 7, signal-utils + signal-polyfill, a hand-rolled
+  alien-signals class) x seven class-shaped scenarios (vm-write, fleet-read
+  and fleet-tick over 10k instances, cascade 64/16+aggregate, deep-vm 64-deep,
+  churn as the headline, retention as gates). Ported lite-signal rig: anti-DCE
+  sink with analytic expected-sum oracles (skipped work rejects the lane),
+  median-of-5 + min, GC-fenced runs with real delta/retained heap columns,
+  machine provenance stamps with resolved adapter versions, a sabotaged-adapter
+  self-test proving the harness can fail, and machine-gated effect liveness on
+  lifecycle lanes. Candidates `classy-solid` and `@reactively/decorate` probed
+  and excluded with recorded one-line blockers (solid's stock-Node SSR
+  resolution; legacy-only decorators). Reproducible from a clean clone:
+  `cd bench && npm install && npm run bench`.
+- `fleet-soak` -- the 13th torture scenario (soak group): 2000 VMs (16000 pool
+  nodes exactly) under sustained ticks with partial churn rotations for a
+  wall-clock budget; per-sample F-0, flat retained heap, gcGate maxMajor 0;
+  its sabotage control leaks one VM per rotation and is caught at the first
+  sample.
+- `decisions/0006-kill-criteria.md` -- the formal verdicts. Criterion 1 (the
+  2.0x line vs the hand-written instance-field baseline) CLEARED WITH MARGIN:
+  vm-write 0.94x, fleet-read 1.10x (parity, per 0003's tied-layout finding).
+  Criterion 2 (churn cleanliness) CLEARED: 0 major and 0 minor collections
+  over 4096 lifecycle cycles on every lite lane, pools at floor (asserted
+  in-lane), retained settled at-or-below baseline -- and the decorated churn
+  loop emits ~12.6x less transient garbage than the hand-rolled equivalent.
+  Every competitor number published under the same stamp (AD-6 honesty
+  tiering); the wide-shape cascade/deep-vm gap vs raw boxes is recorded as an
+  S4 investigation item, not hidden.
+
+### Changed
+
+- README: the measured-numbers section now cites the cross-framework matrix
+  and the 0006 verdicts alongside the package's own committed probes; version
+  references bumped.
+- CHANGELOG release links now point at the package `repository`
+  (github.com/PeshoVurtoleta/lite-signal-decorators), matching the new
+  `repository`/`homepage`/`funding` fields in package.json.
+- `llms.txt` scope note: 0.3.0 adds only dev-side proof; the export surface
+  is unchanged and frozen for 0.x.
+
 ## [0.2.0] - 2026-08-26
 
 The adversarial-torture release: the 0.2 surface is frozen for 0.x, proven by
@@ -54,9 +105,8 @@ gc major=0 minor=0`.
 
 ## [0.2.0-preview.1] - 2026-08-26
 
-The full runtime surface. Exports grow from 8 to 11. Never published: the
-preview publish was pending npm authentication when 0.2.0 superseded it; the
-changes below first shipped with 0.2.0.
+The full runtime surface. Exports grow from 8 to 11. Published under the
+`preview` dist-tag on the same day 0.2.0 went to `latest`.
 
 ### Added
 
@@ -152,6 +202,7 @@ Initial release -- the decorator core.
 - Torture skeleton (`@zakkster/lite-leak` + `@zakkster/lite-gc-profiler`):
   retention, conservation, lifecycle, and zero-GC lanes.
 
-[0.2.0]: https://github.com/zakkster/lite-signal-decorators/releases/tag/v0.2.0
-[0.2.0-preview.1]: https://github.com/zakkster/lite-signal-decorators/releases/tag/v0.2.0-preview.1
-[0.1.0]: https://github.com/zakkster/lite-signal-decorators/releases/tag/v0.1.0
+[0.3.0]: https://github.com/PeshoVurtoleta/lite-signal-decorators/releases/tag/v0.3.0
+[0.2.0]: https://github.com/PeshoVurtoleta/lite-signal-decorators/releases/tag/v0.2.0
+[0.2.0-preview.1]: https://github.com/PeshoVurtoleta/lite-signal-decorators/releases/tag/v0.2.0-preview.1
+[0.1.0]: https://github.com/PeshoVurtoleta/lite-signal-decorators/releases/tag/v0.1.0

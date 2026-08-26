@@ -1,0 +1,22 @@
+{
+  "name": "lite-signal-decorators-bench",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Private, never-shipped class-reactivity benchmark for @zakkster/lite-signal-decorators. Not part of the package files[]; see PLAN-S3 PD-20.",
+  "scripts": {
+    "bench": "node --expose-gc benchmark.mjs",
+    "bench:quick": "BENCH_QUICK=1 node --expose-gc benchmark.mjs",
+    "selftest": "node --expose-gc lib/_selftest.mjs"
+  },
+  "dependencies": {
+    "@reactively/core": "^0.0.8",
+    "@reactively/decorate": "^0.0.4",
+    "alien-signals": "^3.2.1",
+    "classy-solid": "^0.5.2",
+    "mobx": "^7.0.3",
+    "signal-polyfill": "^0.2.2",
+    "signal-utils": "^0.21.1",
+    "solid-js": "^1.9.15"
+  }
+}

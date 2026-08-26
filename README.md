@@ -245,7 +245,7 @@ Symbol keys work (`Reflect.ownKeys`). A spec key colliding with an own property 
 | Export | Value |
 |---|---|
 | `ReactiveDisposedError` | `extends Error`; `name: "ReactiveDisposedError"`; fields `className`, `key`. Thrown on ANY touch of a disposed instance's surface. |
-| `VERSION` | `"0.2.0"` |
+| `VERSION` | `"0.3.0"` |
 
 ### The rejection matrix
 
@@ -348,7 +348,7 @@ The gates that hold it (run on every change, all green at 0.2.0):
 - Torture: **12/12 scenarios** (zero-GC read/write lanes at `maxMajor 0, maxPauseMs 4`; 4096-cycle leak gate at 0 live / 0 findings / 0 warnings; capacity atomicity at every overflow point; a 300-seed x 20k-op oracle with zero divergences) -- plus **12/12 sabotage controls** proving each gate can actually fail.
 - `churn-soak`: sustained construct/use/dispose for a wall-clock budget; pools at floor and retained heap flat at every sample.
 
-The cross-framework churn benchmark (vs MobX-style layers and signal-utils, with the same anti-DCE rig) is the 0.3.0 milestone; the numbers above are the package's own committed probes.
+The cross-framework matrix lives in `bench/` (private, never shipped): six engines -- both our tiers, the hand-written `lite-raw-boxes` baseline, MobX 7, signal-utils/signal-polyfill, and a hand-rolled alien-signals class -- across seven class-shaped scenarios, checksum-verified for identical work, stamped into `bench/results.txt`. The formal verdicts are in [`decisions/0006-kill-criteria.md`](decisions/0006-kill-criteria.md): the decorated path measured **0.94x** the hand-written baseline on vm-write and **1.10x** on a 10k-instance fleet read (the 2.0x kill line cleared with margin), and **0 major + 0 minor GC over 4096 construct/use/dispose cycles** with pools at floor -- while emitting ~12.6x less transient garbage per churn run than the hand-rolled class it replaces.
 
 </details>
 
@@ -473,7 +473,7 @@ Because an instance whose base-class boxes live in one pool and whose subclass b
 No, and the README says so with numbers: 22.12 ns/op vs 15.25 raw vs 11.67 unbatched on the reference rig -- a thunk + rest-array per call. Use it for actions; keep per-frame writes on plain accessors.
 
 **Where are `costOf`, labels, the audit hook, private members?**
-Not in 0.2.0 -- the runtime surface is complete and frozen for 0.x, and the introspection layer is roadmapped behind the 0.3.0 benchmark. The `llms.txt` scope note tracks exactly what is and isn't included.
+Not in 0.3.0 -- the runtime surface froze for 0.x at 0.2.0, and the introspection layer (capacity accounting, devtools identity) is the 0.4.0 milestone. The `llms.txt` scope note tracks exactly what is and isn't included.
 
 ---
 

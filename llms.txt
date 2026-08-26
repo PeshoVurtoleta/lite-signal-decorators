@@ -1,6 +1,6 @@
 # @zakkster/lite-signal-decorators
 
-VERSION 0.2.0
+VERSION 0.3.0
 
 > Stage-3 decorator layer over @zakkster/lite-signal. Turns a plain class into a
 > reactive view-model where each instance has a measured per-property cost, a
@@ -55,7 +55,7 @@ slot for a poison handle, so any later read/write throws a named
   `forEachOwned` / lite-devtools. Throws `ReactiveDisposedError` after dispose.
 - `ReactiveDisposedError` -- `extends Error`, `name` `"ReactiveDisposedError"`,
   fields `className` and `key`.
-- `VERSION` -- `"0.2.0"`.
+- `VERSION` -- `"0.3.0"`.
 
 ## Registry law (one registry per host chain)
 
@@ -137,7 +137,8 @@ routed per-registry via `createRegistry()`).
 
 ## Scope note
 
-0.2.0 ships the full runtime surface: the decorator core plus
-`@reactiveEffect`, `@batched`, `@reactiveHost({ registry })`, and
-`defineReactive`. Not yet included: cost introspection (`costOf`/`capacityFor`),
-labels, an audit hook, and private-member support.
+0.3.0 = the 0.2.0 runtime surface (unchanged -- the same 11 exports, frozen for
+0.x) plus the dev-side class-reactivity benchmark (`bench/`, private, never
+shipped) and the fleet-soak torture scenario; the formal kill-criteria verdicts
+live in decisions/0006-kill-criteria.md. Not yet included: cost introspection
+(`costOf`/`capacityFor`), labels, an audit hook, and private-member support.
