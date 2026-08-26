@@ -1,0 +1,35 @@
+{
+  "name": "@zakkster/lite-signal-decorators",
+  "version": "0.0.0",
+  "private": true,
+  "description": "S0 spike phase -- not yet published. The reactive class layer where an instance has a measured cost, deterministic teardown, and a churn benchmark.",
+  "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "spikes": "for f in spikes/*.mjs; do echo \"== $f ==\"; node --expose-gc \"$f\" || exit 1; done",
+    "spike:emit": "node --expose-gc spikes/emit/probe.mjs",
+    "spike:ownership": "node --expose-gc spikes/ownership.mjs",
+    "spike:storage": "node --expose-gc spikes/storage-bench.mjs",
+    "spike:manual": "node --expose-gc spikes/manual-call.mjs",
+    "spike:poison": "node --expose-gc spikes/poison.mjs",
+    "spike:buildless": "node --expose-gc spikes/buildless.mjs",
+    "fixtures:regen": "node spikes/emit/regen.mjs"
+  },
+  "peerDependencies": {
+    "@zakkster/lite-signal": ">=1.5.0 <2.0.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.0",
+    "@babel/plugin-proposal-decorators": "^7.25.0",
+    "@babel/preset-typescript": "^7.29.7",
+    "@zakkster/lite-gc-profiler": "^1.16.0",
+    "@zakkster/lite-leak": "^1.10.0",
+    "@zakkster/lite-signal": "1.5.0",
+    "typescript": "^5.6.0"
+  },
+  "sideEffects": false
+}
