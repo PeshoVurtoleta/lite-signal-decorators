@@ -48,11 +48,18 @@ gate for any control that still exits 0 (a gate that cannot fail is not a gate).
 
 | scenario | break injects |
 |----------|---------------|
-| emit-matrix       | skips the Babel half (completeness counter catches it) |
-| ordering-torture  | expects E+1 effect first-runs (the effect start-count gate) |
-| lifecycle-torture | expects a post-dispose box write to re-fire the stopped effect |
-| pool-conservation | leaks one instance every 256 cycles (skips its dispose) |
-| zerogc-torture    | allocates `new Array(1024)` per op in the read lane |
+| emit-matrix           | skips the Babel half (completeness counter catches it) |
+| ordering-torture      | expects E+1 effect first-runs (the effect start-count gate) |
+| lifecycle-torture     | expects a post-dispose box write to re-fire the stopped effect |
+| pool-conservation     | leaks one instance every 256 cycles (skips its dispose) |
+| zerogc-torture        | allocates `new Array(1024)` per op in the read lane |
+| capacity-torture      | skips the filler-free before each revival (the "identical construction succeeds" assertion catches it) |
+| disposed-poison       | pretends the poison swap was skipped for slot 0 (asserts it reads live; reality throws) |
+| leak-torture          | skips one dispose every 512 cycles (the tracker catches the orphan) |
+| oracle-fuzzer         | the decorated lane silently skips every 1024th write (value/fire divergence catches it) |
+| interop-torture       | wraps the cross-registry pin in a softening try/catch (the raw-contract assertion catches it) |
+| batch-untrack-torture | replaces one `peek` with a tracked get (the zero-edge re-run count catches it) |
+| churn-soak            | leaks one instance per 1024 cycles (F-0 / flat-heap sample catches it) |
 
 ## TORTURE_SEED -- replay
 
@@ -73,8 +80,15 @@ TORTURE_SEED=12345 node --expose-gc test/torture/ordering-torture.mjs
 | lifecycle-torture | semantic | 1.5.0 | anchor/rootOf, cascade-once (P+D+E+1), idempotent double dispose, DV-1 detachment, `using`, post-dispose throws, effect start-timing, dispose-stop, D-4d self-dispose (clean + poison), foreign-manual-call zero edges |
 | pool-conservation | semantic | 1.5.0 | F-0 over 4096 churn cycles (E<=3 shapes) + capacity-primed derived-overflow AND first-effect-overflow CapacityError + registry-isolation (bound churn, default frozen) |
 | zerogc-torture    | semantic | 1.5.0 | zero-GC read + write lanes (maxMajor 0, maxPauseMs 4, control-floored maxMinor); the canon is untouched by S2a and batched is excluded (R8) |
+| capacity-torture  | semantic | 1.5.0 | init/wiring capacity atomicity (D-2h) at EVERY failure point x both paths: K-th signal (decorator field-init + buildless wire loop), anchor (headroom = P), m-th derived, m-th effect; plus host-chain init overflow (a/b/c) and a nested LIFO-frame case -- each asserts CapacityError by name + F-0 exact + fillers-freed revival |
+| disposed-poison   | semantic | 1.5.0 | full post-dispose surface (accessors/deriveds/boxOf/rootOf/manual @reactiveEffect + @batched, D-4e/poison) on decorated AND defineReactive instances; resurrection storm yields zero owned-effect executions + zero derived recomputes and never un-poisons a slot |
+| leak-torture      | semantic | 1.5.0 | lite-leak tracker + ownerCascade/observerOrphan kernels over 4096 mixed-shape cycles: 0 live / 0 findings / 0 warnings after settle; a skipped dispose every 512 cycles is caught |
+| oracle-fuzzer     | semantic | 1.5.0 | seeded shape fuzzer -- decorated vs hand-wired raw twin: every derived value, effect fire count, and onGraphMutation opcode tally match over 20k ops x >=300 seeds; F-0 after teardown |
+| interop-torture   | semantic | 1.5.0 | decorated <-> raw in one graph (both directions) + cross-registry raw-contract pins + registry.destroy() mid-life + P-2 documented limits (indirect self-dispose, untrack-wrapped) |
+| batch-untrack-torture | semantic | 1.5.0 | @batched nesting/flush-at-outermost + exception unwind + `boxOf(...).peek()` adds no edge + untrack() dep suppression + manual guarded calls in batches |
+| churn-soak        | soak     | 1.5.0 | wall-clock construct/use/dispose soak (`--seconds`): F-0 at each ~1s sample, retained heap flat, gcGate maxMajor 0 across the soak |
 
-The `soak` group is empty in 0.1.0; `--group soak` prints a notice and exits 0.
+The `soak` group runs `churn-soak`; `--group soak` runs it alone.
 
 ## S2a effect + registry lanes
 

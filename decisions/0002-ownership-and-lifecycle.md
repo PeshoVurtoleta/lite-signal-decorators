@@ -193,8 +193,74 @@ Cost: one `Object.isFrozen` on the cold dispose entry (already a cold,
 construction/teardown path); the allocation-free success path is otherwise
 unchanged.
 
+### D-2h -- init-phase capacity atomicity (added 0.2.0, S2b finding P-1)
+
+Status: ACCEPTED (S2b). Torture-confirmed finding, fixed on confirmation.
+
+Exhibit (scratchpad `p1-probe.mjs`; default registry primed to headroom 2, a
+P=4 decorated class): constructing overflows on the 3rd box. BEFORE the fix,
+`new` threw `CapacityError` with boxes a+b ALREADY created and nobody to dispose
+them -- `activeNodes` stayed elevated by 2, F-0 broken. Decorator signal boxes
+are created in accessor `init` during `super()`'s field initialization, which
+runs BEFORE `wireInstance`'s try/catch exists, so the S1 wiring-phase rollback
+never covered them. (The buildless path was already atomic -- its boxes are
+wire-time, inside the try/catch.)
+
+Ruling: the scratch-frame protocol. A module `SCRATCH` stack tracks every box
+`makeInit` creates. The wrapper `W`'s constructor captures the frame index
+`f = SCRATCH.length` before `super(...)`; on a throw it drains its own frame LIFO
+(`for i = SCRATCH.length-1; i >= f; i--) plan.reg.dispose(SCRATCH.pop())`) and
+rethrows; on success it truncates `SCRATCH.length = f` before wiring. The INDEX
+is the frame marker, so composition-nested constructions (a field initializer
+building another INDEPENDENT reactive VM) unwind correctly -- the inner `W`
+drains/clears its own frame first (LIFO), and because a nested inner VM on a
+DIFFERENT registry has already drained its frame, every box left in this frame
+belongs to this plan's registry, so `plan.reg.dispose` is always the right
+registry.
+
+Rejection history (recorded, not erased): the first cut ran the frame protocol
+in EVERY wrapper of a `Base@reactiveHost <- Derived@reactiveHost` chain. The
+reviewer's measured counterexample (2-level chain, `maxNodes:1`): the intermediate
+`W_Base` completes its own `super()` and truncates `SCRATCH.length` back to its
+captured index -- the SAME depth as the leaf's -- EVICTING Base's init boxes from
+the frame before Derived's init overflows; the leaf's catch then drains an empty
+range and Base's boxes leak (`activeNodes` 0 -> 1, scaling with base accessor
+count and depth). REJECTED. Fix (consistent with PD-5): gate the ENTIRE frame
+protocol -- capture, catch-drain, and success-truncate -- on the most-derived
+host check `new.target[HOST_MARK] === W`. Only the wiring `W` runs it; its
+`super()` spans the whole chain, so its single `[f, end)` frame covers every base
++ derived init box. Intermediate hosts call plain `super(...args)` and leave
+their init boxes in the leaf's frame. Undecorated-subclass wiring (`Leaf extends`
+hosted `Base`) stays correct: the inherited `HOST_MARK` makes `W_Base` the frame
+owner, and the orphan rule bars reactive members below the wiring host, so every
+reactive init box is created within the owner's `super()` span.
+
+Mechanism cost: hot canon untouched; the dispose path untouched;
+`wireInstance` keeps its wiring-phase try/catch. The only new steady-state cost
+is one `SCRATCH.push` per box + one `SCRATCH.length` reset per construction (the
+array capacity amortizes to zero allocation). AFTER the fix the probe reports
+`CapacityError` from `new`, leaked nodes = 0 after settle, and an identical
+construction on a registry with headroom succeeds.
+
+Wiring-entry extension (S2b, from Coder D's T1 capacity lanes): the atomicity
+claim covers EVERY capacity point, not only the init phase. Two wiring-phase
+points originally sat BEFORE `wireInstance`'s try -- the buildless signal
+wire-loop and the R-A anchor creation. A `CapacityError` at a buildless box K, or
+at the anchor effect when headroom is exactly P, propagated with no `disposeCore`
+(and by then W's SCRATCH frame is already truncated on the decorator path, or was
+never populated on the buildless path), leaking the boxes created so far. Fix:
+both the buildless loop and the anchor creation now sit INSIDE `wireInstance`'s
+try, so `disposeCore` is the sole wiring-phase cleaner. It tolerates every
+partial state -- `ANCHOR` undefined is skipped, prewired `NONLIVE` slots are
+skipped, real boxes are disposed -- and the frame protocol is unchanged
+(truncate-before-wiring stays correct, no double dispose). The T1 lanes (buildless
+box overflow mid-loop; anchor overflow at headroom P on both paths) now gate
+green.
+
 ## Evidence
 
 `spikes/ownership.mjs` (Q1..Q5 tables), `spikes/poison.mjs` (throw + 0-byte swap
 + unbranched read + conservation). Both exit 0; SPIKE lines PASS. D-2g repro in
-QA's `test/10-qa-s2a-boundary.test.mjs` (frozen-dispose case).
+QA's `test/10-qa-s2a-boundary.test.mjs` (frozen-dispose case). D-2h exhibit in
+`scratchpad/p1-probe.mjs` and the S2b `test/torture/capacity-torture.mjs`
+decorator-path lane (leaked = 2 before, 0 after).

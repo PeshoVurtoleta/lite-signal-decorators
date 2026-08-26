@@ -11,7 +11,7 @@
 // Usage:
 //   node test/torture/run.mjs                    # every scenario
 //   node test/torture/run.mjs --group semantic   # correctness lane (CI)
-//   node test/torture/run.mjs --group soak       # resource soaks (empty in 0.1.0)
+//   node test/torture/run.mjs --group soak       # resource soaks (churn-soak)
 //   node test/torture/run.mjs --list             # show the table and exit
 //   node test/torture/run.mjs --bail             # stop at the first failure
 //   node test/torture/run.mjs --lenient          # floor-escalation FAIL -> WARN
@@ -41,14 +41,22 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SKIP_EXIT = 77;
 const INFRA_EXIT = 78;
 
-// Scenario table. In 0.1.0 every scenario is `semantic` and floors at 1.5.0
-// (signalBox/computedBox + owner descriptors); the `soak` group is empty.
+// Scenario table. Every scenario floors at 1.5.0 (signalBox/computedBox + owner
+// descriptors); the `semantic` group is the correctness lane, `soak` the
+// wall-clock resource lane (churn-soak).
 const SCENARIOS = [
     { name: "emit-matrix", file: "emit-matrix.mjs", group: "semantic", floor: "1.5.0", about: "fixture-hash freshness + L-law consequences on both emits" },
     { name: "ordering-torture", file: "ordering-torture.mjs", group: "semantic", floor: "1.5.0", about: "PRNG shapes + full PD-8 rejection matrix" },
     { name: "lifecycle-torture", file: "lifecycle-torture.mjs", group: "semantic", floor: "1.5.0", about: "anchor/cascade/idempotency/DV-1/using" },
     { name: "pool-conservation", file: "pool-conservation.mjs", group: "semantic", floor: "1.5.0", about: "F-0 over churn + S1-A3 capacity-primed mid-wiring" },
     { name: "zerogc-torture", file: "zerogc-torture.mjs", group: "semantic", floor: "1.5.0", about: "zero-GC read/write lanes (maxMajor 0, maxPauseMs 4)" },
+    { name: "capacity-torture", file: "capacity-torture.mjs", group: "semantic", floor: "1.5.0", about: "init/wiring capacity atomicity at every failure point x both paths (D-2h)" },
+    { name: "disposed-poison", file: "disposed-poison.mjs", group: "semantic", floor: "1.5.0", about: "full post-dispose poison surface + resurrection storm (decorated + buildless)" },
+    { name: "leak-torture", file: "leak-torture.mjs", group: "semantic", floor: "1.5.0", about: "lite-leak tracker over 4096 churn cycles (0 live / 0 findings / 0 warnings)" },
+    { name: "oracle-fuzzer", file: "oracle-fuzzer.mjs", group: "semantic", floor: "1.5.0", about: "seeded shape fuzzer: decorated vs raw twin, values + fires + opcode tallies" },
+    { name: "interop-torture", file: "interop-torture.mjs", group: "semantic", floor: "1.5.0", about: "decorated <-> raw in one graph + cross-registry + P-2 documented limits" },
+    { name: "batch-untrack-torture", file: "batch-untrack-torture.mjs", group: "semantic", floor: "1.5.0", about: "@batched nesting/unwind + untrack dep-suppression + peek adds no edge" },
+    { name: "churn-soak", file: "churn-soak.mjs", group: "soak", floor: "1.5.0", about: "wall-clock construct/use/dispose soak: F-0 + flat heap + gcGate 0" },
 ];
 
 // --- semver (hand-rolled triple compare; strip any -tag suffix) ---------------
@@ -108,14 +116,10 @@ if (list) {
     process.exit(0);
 }
 
-// Group selection. `soak` is empty in 0.1.0: a clean exit-0, not an error.
+// Group selection. Both `semantic` and `soak` carry scenarios from 0.2.0 on.
 if (group !== null && group !== "semantic" && group !== "soak") {
     console.error('unknown group "' + group + '" -- expected "semantic" or "soak"');
     process.exit(2);
-}
-if (group === "soak") {
-    process.stdout.write("no soak scenarios in 0.1.0\n");
-    process.exit(0);
 }
 let selected = SCENARIOS;
 if (group !== null) selected = selected.filter((s) => s.group === group);

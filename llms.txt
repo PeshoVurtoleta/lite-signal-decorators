@@ -1,6 +1,6 @@
 # @zakkster/lite-signal-decorators
 
-VERSION 0.2.0-preview.1
+VERSION 0.2.0
 
 > Stage-3 decorator layer over @zakkster/lite-signal. Turns a plain class into a
 > reactive view-model where each instance has a measured per-property cost, a
@@ -55,7 +55,7 @@ slot for a poison handle, so any later read/write throws a named
   `forEachOwned` / lite-devtools. Throws `ReactiveDisposedError` after dispose.
 - `ReactiveDisposedError` -- `extends Error`, `name` `"ReactiveDisposedError"`,
   fields `className` and `key`.
-- `VERSION` -- `"0.2.0-preview.1"`.
+- `VERSION` -- `"0.2.0"`.
 
 ## Registry law (one registry per host chain)
 
@@ -91,6 +91,10 @@ for effects. Disposing a FROZEN instance is refused up front with a named error
 (D-2g): the poison swap cannot be installed on a frozen object, so a partial
 half-dispose is never started (`using` over a frozen instance is covered too;
 `Object.seal`/`preventExtensions` stay fine -- slots remain writable).
+Construction is atomic at every capacity point (D-2h): if a signal box, the
+anchor, a derived, or an effect overflows the registry mid-construction, `new`
+throws the engine's `CapacityError` and every box already created is disposed --
+no node leaks, on the decorator path (init-phase) and the buildless path alike.
 
 ## Buildless contract (defineReactive)
 
@@ -133,7 +137,7 @@ routed per-registry via `createRegistry()`).
 
 ## Scope note
 
-0.2.0-preview.1 ships the full runtime surface: the decorator core plus
+0.2.0 ships the full runtime surface: the decorator core plus
 `@reactiveEffect`, `@batched`, `@reactiveHost({ registry })`, and
 `defineReactive`. Not yet included: cost introspection (`costOf`/`capacityFor`),
 labels, an audit hook, and private-member support.

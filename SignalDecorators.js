@@ -1,5 +1,5 @@
 /**
- * @zakkster/lite-signal-decorators v0.2.0-preview.1
+ * @zakkster/lite-signal-decorators v0.2.0
  * --------------------
  * Stage-3 decorator layer over @zakkster/lite-signal. Turns a plain class into
  * a reactive view-model with measured per-instance cost and deterministic
@@ -72,6 +72,15 @@ const NONLIVE = Symbol("lite-signal-decorators.nonlive");
 
 // Frozen sentinel written to ANCHOR on dispose (idempotency signal, PD-7).
 const DISPOSED = Object.freeze({ [NONLIVE]: "disposed" });
+
+// Scratch-frame stack (D-2h): decorator signal boxes are created in accessor
+// `init` during super()'s field initialization -- BEFORE wireInstance's
+// try/catch exists. Each init pushes its box here; the wrapper constructor
+// captures the frame index before super(), drains its own frame LIFO on a throw
+// (init-phase CapacityError atomicity), and truncates it on success. The index
+// is the frame marker, so nested constructions unwind correctly. Amortizes to
+// zero steady-state allocation (one push + one length reset per construction).
+const SCRATCH = [];
 
 // Hoisted package prefix (PD-15): every cold error message begins with this.
 const ERR = "@zakkster/lite-signal-decorators: ";
@@ -433,7 +442,9 @@ function makeDerivedGet(slot) { return function () { return this[slot].get(); };
 function makeInit(rec) {
     return function (v) {
         if (rec.plan === null) throwMissingHost(rec);
-        this[rec.slot] = rec.plan.reg.signalBox(v, rec.opts);
+        const box = rec.plan.reg.signalBox(v, rec.opts);
+        this[rec.slot] = box;
+        SCRATCH.push(box);                     // D-2h: track for init-phase rollback
         return v;                              // emitter backing store, unused
     };
 }
@@ -827,17 +838,24 @@ function makeEffectBody(inst, fn) { return function () { return fn.call(inst, in
 
 function wireInstance(inst, plan) {
     const reg = plan.reg;
-    // Buildless signals: create bare boxes in spec order BEFORE the anchor.
-    // Decorator boxes already exist from field-init time (initFn === null).
-    const sigs = plan.signals;
-    for (let i = 0; i < sigs.length; i++) {
-        const r = sigs[i];
-        if (r.initFn !== null) inst[r.slot] = reg.signalBox(r.initFn(inst), r.opts);
-    }
-    let a;
-    reg.createRoot(() => { reg.effect(() => { a = reg.getOwner(); }); });   // R-A anchor
-    inst[ANCHOR] = a;
+    // The WHOLE wiring phase is atomic (D-2h): the buildless box loop and the
+    // R-A anchor creation sit INSIDE the try, so a CapacityError at a buildless
+    // box (mid-loop) or at the anchor effect (headroom P exactly) still routes
+    // through disposeCore. By this point W has already truncated its SCRATCH
+    // frame (decorator path) or never populated it (buildless), so disposeCore
+    // is the sole wiring-phase cleaner -- no double dispose. disposeCore tolerates
+    // every partial state (ANCHOR undefined -> skipped; prewired slots -> skipped).
     try {
+        // Buildless signals: create bare boxes in spec order BEFORE the anchor.
+        // Decorator boxes already exist from field-init time (initFn === null).
+        const sigs = plan.signals;
+        for (let i = 0; i < sigs.length; i++) {
+            const r = sigs[i];
+            if (r.initFn !== null) inst[r.slot] = reg.signalBox(r.initFn(inst), r.opts);
+        }
+        let a;
+        reg.createRoot(() => { reg.effect(() => { a = reg.getOwner(); }); });   // R-A anchor
+        inst[ANCHOR] = a;
         reg.runWithOwner(a, () => {
             const ders = plan.deriveds;
             for (let i = 0; i < ders.length; i++) {
@@ -912,8 +930,26 @@ function applyReactiveHost(C, ctx, registry) {
 
     class W extends C {
         constructor(...args) {
-            super(...args);
-            if (new.target[HOST_MARK] === W) wireInstance(this, plan);
+            // D-2h scratch frame, gated on the most-derived host (PD-5): ONLY the
+            // wiring W runs the frame protocol. Its super() spans the whole chain,
+            // so its single [f, end) frame covers every base + derived init box.
+            // Intermediate hosts must NOT capture/truncate their own frame -- doing
+            // so would evict their base init boxes before a derived init overflows,
+            // leaking them (the intermediate-host defect). Non-wiring hosts just
+            // call plain super() and leave their boxes in the leaf's frame.
+            if (new.target[HOST_MARK] === W) {
+                const f = SCRATCH.length;
+                try {
+                    super(...args);
+                } catch (e) {
+                    for (let i = SCRATCH.length - 1; i >= f; i--) plan.reg.dispose(SCRATCH.pop());
+                    throw e;
+                }
+                SCRATCH.length = f;             // success: clear the frame before wiring
+                wireInstance(this, plan);
+            } else {
+                super(...args);
+            }
         }
     }
     Object.defineProperty(W, HOST_MARK, { value: W });
@@ -1262,4 +1298,4 @@ export function rootOf(vm) {
 // --- Version ------------------------------------------------------------------
 
 /** Package version. Kept in lockstep with package.json and llms.txt. */
-export const VERSION = "0.2.0-preview.1";
+export const VERSION = "0.2.0";

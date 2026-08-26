@@ -1,6 +1,6 @@
 {
   "name": "@zakkster/lite-signal-decorators",
-  "version": "0.2.0-preview.1",
+  "version": "0.2.0",
   "description": "Stage-3 decorator layer over @zakkster/lite-signal. The reactive class layer where an instance has a measured cost, deterministic teardown, and a churn benchmark.",
   "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>",
   "license": "MIT",
@@ -17,9 +17,22 @@
     }
   },
   "sideEffects": false,
+  "homepage": "https://github.com/PeshoVurtoleta/lite-signal-decorators#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PeshoVurtoleta/lite-signal-decorators.git"
+  },
+  "bugs": {
+    "url": "https://github.com/PeshoVurtoleta/lite-signal-decorators/issues",
+    "email": "shinikchiev@yahoo.com"
+  },
   "engines": {
     "node": ">=18"
   },
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/PeshoVurtoleta"
+  },,
   "keywords": [
     "signal",
     "signals",
