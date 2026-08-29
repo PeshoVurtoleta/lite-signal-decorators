@@ -221,25 +221,30 @@ export function readPositions(out: Float32Array): number {
 }
 
 /**
- * Advance the fleet one tick. Writes each live entity's velocity (a cheap
- * deterministic wobble) and integrates position, bouncing at the [0,1000] walls.
+ * Advance the fleet one tick. Writes each live entity's velocity (a soft,
+ * frame-rate-normalized spring toward the field center) and integrates
+ * position, bouncing at the [0,1000] walls.
  * Every vx/vy write re-fires that VM's owned effect, so effectFires advances as a
  * real liveness witness. Zero allocation: only scalar reads/writes and a numeric
  * accumulator. Returns a numeric sink (accumulated speed) to defeat DCE.
  */
 export function step(dt: number): number {
     let sink = 0;
+    const s = dt * 60;                  // frame-rate normalization: 1 at 60 fps
     for (let i = 0; i < count; i++) {
         const e = slots[i]!;
-        // wobble velocity a hair -- keeps speed's deps live so the effect fires
-        let nvx = e.vx + (e.x * 0.0001 - 0.05);
-        let nvy = e.vy + (e.y * 0.0001 - 0.05);
+        // soft spring toward the field center (500, 500); the per-tick vx/vy
+        // writes keep speed's deps live so the effect fires. Sign law:
+        // (0.05 - x * 0.0001) pulls TOWARD 500 -- the inverted form repels
+        // every entity into its quadrant's corner.
+        let nvx = e.vx + (0.05 - e.x * 0.0001) * s;
+        let nvy = e.vy + (0.05 - e.y * 0.0001) * s;
         if (nvx > 2) nvx = 2; else if (nvx < -2) nvx = -2;
         if (nvy > 2) nvy = 2; else if (nvy < -2) nvy = -2;
         e.vx = nvx;
         e.vy = nvy;
-        let nx = e.x + nvx * dt * 60;
-        let ny = e.y + nvy * dt * 60;
+        let nx = e.x + nvx * s;
+        let ny = e.y + nvy * s;
         if (nx < 0) { nx = 0; e.vx = -nvx; }
         else if (nx > 1000) { nx = 1000; e.vx = -nvx; }
         if (ny < 0) { ny = 0; e.vy = -nvy; }

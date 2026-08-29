@@ -43,7 +43,9 @@ const POS_BUF = new Float32Array(N_MAX * 2);   // preallocated readout buffer
 const COL = { fleet: "", tel: "", good: "", grid: "", line: "", fill: "" };
 function readColors(): void {
     const cs = getComputedStyle(document.documentElement);
-    COL.fleet = cs.getPropertyValue("--fleet").trim() || "#43b4e4";
+    // --fleet-dot, not --fleet: the viewport is a dark screen in both themes,
+    // so the dot color is theme-invariant (--fleet goes dark in light scheme).
+    COL.fleet = cs.getPropertyValue("--fleet-dot").trim() || "#43b4e4";
     COL.tel = cs.getPropertyValue("--tel").trim() || "#ffb454";
     COL.good = cs.getPropertyValue("--good").trim() || "#4fd6a3";
     COL.grid = cs.getPropertyValue("--grid").trim() || "rgba(67,180,228,0.07)";
@@ -57,6 +59,26 @@ readColors();
 const sctx = $scene.getContext("2d")!;
 let viewW = $scene.width;
 let viewH = $scene.height;
+let dotPx = 3;                          // entity dot edge, kept at 3 CSS px
+
+// Size the scene's backing store to its CSS box (x dpr, clamped at 2) and keep
+// the dot edge at 3 CSS px regardless of dpr. Runs at boot AND on resize --
+// without the boot call the canvas stays at its 960x600 attribute size until
+// the first resize event, and a 2-backing-px dot shrinks to 1 CSS px at dpr 2.
+// Reflow law: the layout READ (rect) completes before any canvas WRITE.
+function fitScene(): void {
+    const r = $scene.getBoundingClientRect();
+    if (r.width < 2) return;
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    $scene.width = Math.round(r.width * dpr);
+    $scene.height = Math.round((r.width * 0.625) * dpr);
+    viewW = $scene.width;
+    viewH = $scene.height;
+    dotPx = 3 * dpr;
+    sctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+fitScene();
+
 const spark = new Spark($spark, BUDGET_MS);
 
 // --- Plane B telemetry: inject DOM-writer sinks -------------------------------
@@ -151,15 +173,7 @@ $btnTheme.addEventListener("click", () => {
 });
 
 addEventListener("resize", () => {
-    const r = $scene.getBoundingClientRect();
-    if (r.width >= 2) {
-        const dpr = Math.min(devicePixelRatio || 1, 2);
-        $scene.width = Math.round(r.width * dpr);
-        $scene.height = Math.round((r.width * 0.625) * dpr);
-        viewW = $scene.width;
-        viewH = $scene.height;
-        sctx.setTransform(1, 0, 0, 1, 0, 0);
-    }
+    fitScene();
     spark.resize();
 });
 
@@ -169,11 +183,12 @@ function render(n: number): void {
     sctx.clearRect(0, 0, viewW, viewH);
     const sx = viewW / WORLD_W;
     const sy = viewH / WORLD_H;
+    const half = dotPx * 0.5;           // center the dot so wall-riders stay on-screen
     sctx.fillStyle = COL.fleet;
     for (let i = 0; i < n; i++) {
-        const x = POS_BUF[i * 2] * sx;
-        const y = POS_BUF[i * 2 + 1] * sy;
-        sctx.fillRect(x, y, 2, 2);
+        const x = POS_BUF[i * 2] * sx - half;
+        const y = POS_BUF[i * 2 + 1] * sy - half;
+        sctx.fillRect(x, y, dotPx, dotPx);
     }
 }
 
