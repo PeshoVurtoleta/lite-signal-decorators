@@ -1,6 +1,6 @@
 {
   "name": "@zakkster/lite-signal-decorators",
-  "version": "0.4.0",
+  "version": "1.0.0",
   "description": "Stage-3 decorator layer over @zakkster/lite-signal. The reactive class layer where an instance has a measured cost, deterministic teardown, and a churn benchmark.",
   "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>",
   "license": "MIT",
@@ -67,6 +67,7 @@
     "torture:soak": "node test/torture/run.mjs --group soak",
     "torture:controls": "node test/torture/run.mjs --controls",
     "torture:peer-preview": "node test/torture/peer-preview.mjs",
+    "gate": "node test/gate.mjs",
     "spikes": "for f in spikes/*.mjs; do echo \"== $f ==\"; node --expose-gc \"$f\" || exit 1; done",
     "spike:emit": "node --expose-gc spikes/emit/probe.mjs",
     "spike:ownership": "node --expose-gc spikes/ownership.mjs",
@@ -74,7 +75,11 @@
     "spike:manual": "node --expose-gc spikes/manual-call.mjs",
     "spike:poison": "node --expose-gc spikes/poison.mjs",
     "spike:buildless": "node --expose-gc spikes/buildless.mjs",
-    "fixtures:regen": "node spikes/emit/regen.mjs"
+    "fixtures:regen": "node spikes/emit/regen.mjs",
+    "demo:build": "node demo/build.mjs",
+    "demo:check": "node demo/build.mjs --check",
+    "demo:gc": "node --expose-gc demo/gc-lane.mjs",
+    "demo:storm": "node --expose-gc demo/storm-lane.mjs"
   },
   "peerDependencies": {
     "@zakkster/lite-signal": ">=1.5.0 <2.0.0"
@@ -87,6 +92,8 @@
     "@zakkster/lite-gc-profiler": "^1.16.0",
     "@zakkster/lite-leak": "^1.10.0",
     "@zakkster/lite-signal": "1.5.0",
+    "@zakkster/lite-watch-ex": "^1.1.0",
+    "esbuild": "0.28.2",
     "typescript": "^5.6.0"
   }
 }

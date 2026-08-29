@@ -49,6 +49,7 @@ No base class to extend. No `makeObservable(this, {...})` mirror object to keep 
 - [Design decisions worth knowing](#design-decisions-worth-knowing)
 - [Testing (for clients & QA)](#testing-for-clients--qa)
 - [Compatibility](#compatibility)
+- [Migrating from MobX 7 & signal-utils](#migrating-from-mobx-7--signal-utils)
 - [What this is not](#what-this-is-not)
 - [Ecosystem](#ecosystem)
 - [FAQ](#faq) - [License](#license)
@@ -240,7 +241,7 @@ Symbol keys work (`Reflect.ownKeys`). A spec key colliding with an own property 
 | `boxOf` | `(vm, key) => SignalBox \| ComputedBox` | The live engine box behind a `@reactive`/`@derived` member -- `.peek()`, `.subscribe()`, raw interop. Unknown key: named throw with a did-you-mean. After dispose: `ReactiveDisposedError`. |
 | `rootOf` | `(vm) => NodeDescriptor` | The instance's anchor descriptor -- feeds `forEachOwned` and lite-devtools. Throws `ReactiveDisposedError` after dispose. |
 
-### Introspection & audit (0.4.0)
+### Introspection & audit (1.0.0)
 
 | Export | Signature | Behavior |
 |---|---|---|
@@ -256,7 +257,7 @@ With labels and audit off, the zero-GC budgets are byte-identical to 0.3.0 -- th
 | Export | Value |
 |---|---|
 | `ReactiveDisposedError` | `extends Error`; `name: "ReactiveDisposedError"`; fields `className`, `key`. Thrown on ANY touch of a disposed instance's surface. |
-| `VERSION` | `"0.4.0"` |
+| `VERSION` | `"1.0.0"` |
 
 ### The rejection matrix
 
@@ -305,6 +306,27 @@ console.log(world.stats().activeNodes); // 0 -- every node returned to the pool
 
 The default registry never notices any of it: bound-registry churn leaves outside `stats()` frozen (torture-pinned). And because `boxOf` returns the *engine's* box, everything lite-signal composes with -- subscriptions, `peek`, batch, untrack, lite-raf frame effects -- composes with decorated members too.
 
+### Predicate-gated watchers (`@zakkster/lite-watch-ex`)
+
+`lite-watch-ex` adds one-shot, pausable, and change-gated watchers over the same engine. Its sources are plain **thunks** (`() => vm.hp`, never a box handle), and every watcher creates its effect node in the **default registry** -- so wire one only to a **default-registry** instance (one with no `host.registry`), never across a custom-registry fleet, where the edge would cross a boundary the engine's default `dispose` cannot see:
+
+```js
+import { watchUntil } from "@zakkster/lite-watch-ex";
+import { defineReactive } from "@zakkster/lite-signal-decorators";
+
+// Default-registry instance -- no host.registry, so it lives in the default graph.
+const ReactivePlayer = defineReactive(class Player {}, { signals: { hp: 100 } });
+const vm = new ReactivePlayer();
+
+// Fires ONCE when hp crosses the threshold, then self-disposes:
+watchUntil(() => vm.hp, (h) => h <= 25, (h) => console.log("low hp:", h));
+
+vm.hp = 40;  // predicate false -> no fire
+vm.hp = 20;  // predicate true  -> "low hp: 20", watcher disposes itself
+```
+
+The [`fleet-playground` demo](demo/fleet-playground.html) shows the safe split at scale: decorated entity VMs in an enforced custom registry, all watchers on a separate default-registry telemetry plane.
+
 ---
 
 ## The numbers
@@ -352,12 +374,12 @@ The ~7 ns over raw batch is the guarded thunk + rest-array the decorator allocat
 | `disposeReactive(vm)` | none | allocation-free success path; poison handles are prebuilt per member at decoration time |
 | `boxOf` / `rootOf` / any throw | cold path | introspection and failure paths may allocate; never on the hot path |
 
-The gates that hold it (run on every change, all green at 0.2.0):
+The gates that hold it (run on every change, all green at 1.0.0):
 
-- `npm test` / `npm run test:gc` -- **171/171** on both lanes.
+- `npm test` / `npm run test:gc` -- **214/214** on both lanes.
 - Suite gate (lite-leak + lite-gc-profiler): `leak=size 0/0 findings=0 warnings=0 | gc major=0 minor=0 maxMs=0.00 | ok`.
-- Torture: **12/12 scenarios** (zero-GC read/write lanes at `maxMajor 0, maxPauseMs 4`; 4096-cycle leak gate at 0 live / 0 findings / 0 warnings; capacity atomicity at every overflow point; a 300-seed x 20k-op oracle with zero divergences) -- plus **12/12 sabotage controls** proving each gate can actually fail.
-- `churn-soak`: sustained construct/use/dispose for a wall-clock budget; pools at floor and retained heap flat at every sample.
+- Torture: **15 scenarios** (zero-GC read/write lanes at `maxMajor 0, maxPauseMs 4`; 4096-cycle leak gate at 0 live / 0 findings / 0 warnings; capacity atomicity at every overflow point; a 300-seed x 20k-op oracle with zero divergences) -- **13 run + 2 that skip correctly below their peer floors** (`scope-adoption` needs 1.6.0, `using-dispose` needs 1.9.0; the installed peer is 1.5.0). A skip *below* a floor is the forward-compat design working; a skip *at or above* it is a FAIL (run.mjs enforces floor-escalation). Every scenario carries a `TORTURE_BREAK` sabotage control that must exit non-zero -- **15/15 controls** prove each gate can actually fail.
+- `churn-soak` + `fleet-soak`: sustained construct/use/dispose and a 10s 2k-VM fleet tick; pools at floor and retained heap flat at every sample.
 
 The cross-framework matrix lives in `bench/` (private, never shipped): six engines -- both our tiers, the hand-written `lite-raw-boxes` baseline, MobX 7, signal-utils/signal-polyfill, and a hand-rolled alien-signals class -- across seven class-shaped scenarios, checksum-verified for identical work, stamped into `bench/results.txt`. The formal verdicts are in [`decisions/0006-kill-criteria.md`](decisions/0006-kill-criteria.md): the decorated path measured **0.94x** the hand-written baseline on vm-write and **1.10x** on a 10k-instance fleet read (the 2.0x kill line cleared with margin), and **0 major + 0 minor GC over 4096 construct/use/dispose cycles** with pools at floor -- while emitting ~12.6x less transient garbage per churn run than the hand-rolled class it replaces.
 
@@ -382,18 +404,19 @@ Full rationale lives in [`decisions/`](decisions/) -- each is a numbered, dated 
 ## Testing (for clients & QA)
 
 ```bash
-npm test            # node --test, 171 tests
-npm run test:gc     # the same 171 with --expose-gc (enables the allocation assertions)
+npm test            # node --test, 214 tests
+npm run test:gc     # the same 214 with --expose-gc (enables the allocation assertions)
+npm run gate        # the full pre-publish chain (section 10): fixtures -> test -> test:gc -> torture -> controls -> peer-preview (non-blocking) -> bench selftest -> pack
 ```
 
-**171 tests** across eleven files, all green at 0.2.0. The decorator protocol is tested three times over: against a mock Stage-3 emitter *and* against committed real TypeScript 5 and Babel `2023-11` emits, so both toolchains' codegen is pinned, not assumed.
+**214 tests** across fourteen files, all green at 1.0.0. The decorator protocol is tested three times over: against a mock Stage-3 emitter *and* against committed real TypeScript 5 and Babel `2023-11` emits, so both toolchains' codegen is pinned, not assumed.
 
 | File | Tests | Covers |
 |---|---:|---|
 | `01-protocol-mock` | 30 | Decorator protocol on the mock Stage-3 emitter: wiring, values, options, rejection matrix |
 | `02-fixtures-ts` | 19 | The same laws on real TypeScript 5 emit (committed fixtures) |
 | `03-fixtures-babel` | 19 | The same laws on real Babel `2023-11` emit |
-| `04-fixture-freshness` | 1 | Fixture hashes match the sources (stale-emit guard) |
+| `04-fixture-freshness` | 2 | Fixture hashes match the sources (stale-emit guard) + the README emit-matrix block matches its generator |
 | `05-wiring` | 5 | Anchor creation, wiring order, leaf-wires-once |
 | `06-dispose` | 6 | Cascade, idempotency, poison, `using` |
 | `07-qa-boundary` | 13 | S1 adversarial boundary pins |
@@ -401,19 +424,54 @@ npm run test:gc     # the same 171 with --expose-gc (enables the allocation asse
 | `09-buildless` | 16 | `defineReactive` parity + the spec rejection matrix |
 | `10-qa-s2a-boundary` | 34 | Adversarial pins: identity guard, frozen dispose, registry heterogeneity, stacking |
 | `11-qa-s2b-boundary` | 8 | Construction-throw boundaries: init-phase drain, chain-base throws, overflow storms |
+| `12-accounting` | 11 | `costOf` node/link/shape grid (double-probe, frozen + cached, fail-closed) + `capacityFor` budget sizing |
+| `13-labels-audit` | 10 | `enableLabels`/`labelOf` per-registry identity + `auditReactive` leak reporting, both opt-in and default-OFF |
+| `14-qa-s4-boundary` | 21 | S4 adversarial edges: stats-less facade closure, signals-only capacity floor, label/audit boundary matrix |
+
+### Emit-support matrix
+
+Three fixture sources, two Stage-3 emitters, both emit lanes -- every cell below is a committed, hash-pinned fixture (the `04-fixture-freshness` guard above). The table is generated from the fixture manifest, so a re-emit that changes a byte is loud, not silent:
+
+<!-- EMIT-MATRIX:START -->
+Generated by `node test/fixtures/emit-matrix.mjs` from `test/fixtures/hashes.json` -- do not hand-edit. Toolchain pinned by the committed fixtures: **TypeScript 5.9.3**, **@babel/core 7.29.7** + **@babel/plugin-proposal-decorators 7.29.7** (`version: 2023-11`). Each `sha256` is the first 12 hex of the committed emit; `npm run fixtures` regenerates and `test/04-fixture-freshness` fails loudly on any drift.
+
+| Source | Emitter | Emit lane | Compiled output | sha256 | At decoration time |
+|---|---|---|---|---|---|
+| `fixture.src.ts` | TypeScript 5 | standard 2023-11 | `ts-out/fixture.src.js` | `1a3fc0f943bf` | accepted -- full decorator surface wired + pinned green |
+| `fixture.src.ts` | Babel | standard 2023-11 | `babel-out/fixture.src.js` | `eb9dfb5939b1` | accepted -- full decorator surface wired + pinned green |
+| `static.src.ts` | TypeScript 5 | standard 2023-11 | `ts-out/static.src.js` | `d2a03e3d5f70` | rejected -- static member is a named throw at decoration time |
+| `static.src.ts` | Babel | standard 2023-11 | `babel-out/static.src.js` | `dc936c5aa235` | rejected -- static member is a named throw at decoration time |
+| `legacy.src.ts` | TypeScript 5 | legacy (experimental) | `ts-legacy-out/legacy.src.js` | `c1059b1d37b1` | rejected -- legacy emit -> named rejection at decoration time |
+| `legacy.src.ts` | Babel | legacy (experimental) | `babel-legacy-out/legacy.src.js` | `1d35a02c57ce` | rejected -- legacy emit -> named rejection at decoration time |
+
+Source hashes: `fixture.src.ts` `fb492a396340`, `static.src.ts` `81fb649965e6`, `legacy.src.ts` `30ac3dabaf7c`.
+<!-- EMIT-MATRIX:END -->
 
 ### The torture suite (dev-side, never shipped)
 
 Process-isolated stress scenarios built on `@zakkster/lite-leak` + `@zakkster/lite-gc-profiler`:
 
 ```bash
-npm run torture             # all 12 scenarios
+npm run torture             # all 15 scenarios (13 run + 2 floor-gated skips)
 npm run torture:semantic    # the correctness lane (CI)
-npm run torture:soak        # the wall-clock churn soak
+npm run torture:soak        # the wall-clock churn + fleet soaks
 npm run torture:controls    # sabotage self-test: every scenario must FAIL when broken
 ```
 
-Twelve scenarios: emit-matrix, ordering, lifecycle, pool-conservation, zero-GC lanes, capacity atomicity (every overflow point x both construction paths), the full disposed-poison surface + resurrection storms, a 4096-cycle lite-leak gate, a **300-seed x 20k-op oracle fuzzer** (decorated vs hand-wired raw twin in lockstep: every derived value, every effect fire count, every graph opcode tally), raw/decorated interop + cross-registry + `registry.destroy()` contracts, batch/untrack semantics, and the churn soak. Every scenario carries a `TORTURE_BREAK` sabotage control that must exit non-zero -- a gate that cannot fail is not a gate. Seeded lanes replay exactly via `TORTURE_SEED`.
+Fifteen scenarios: emit-matrix, ordering, lifecycle, pool-conservation, zero-GC lanes, capacity atomicity (every overflow point x both construction paths), the full disposed-poison surface + resurrection storms, a 4096-cycle lite-leak gate, a **300-seed x 20k-op oracle fuzzer** (decorated vs hand-wired raw twin in lockstep: every derived value, every effect fire count, every graph opcode tally), raw/decorated interop + cross-registry + `registry.destroy()` contracts, batch/untrack semantics, the wall-clock churn soak, and a 10s 2k-VM fleet soak -- plus two forward-compat scenarios (`scope-adoption`, `using-dispose`) that **skip correctly** while the installed peer sits below their per-feature floors (1.6.0 `createScope`, 1.9.0 `Symbol.dispose`). A skip below a floor is the design working; a skip at or above it is a FAIL. On the installed 1.5.0 peer: 13 pass, 2 skip. Every scenario carries a `TORTURE_BREAK` sabotage control that must exit non-zero -- a gate that cannot fail is not a gate. Seeded lanes replay exactly via `TORTURE_SEED`.
+
+### The fleet demo (dev-side, never shipped)
+
+A single-file instrument console -- [`demo/fleet-playground.html`](demo/fleet-playground.html) -- drives a two-plane capacity fleet: decorated entity VMs in an enforced custom registry, telemetry watchers in the default registry. Its DOM-free core runs headless under the same gates the library uses:
+
+```bash
+npm run demo:build          # esbuild bundle -> demo/bundle.js + rewrite demo/bundle.sha256
+npm run demo:check          # verify the committed bundle matches its recorded hash
+npm run demo:gc             # headless GC-budget lane over the fleet core (maxMajor 0)
+npm run demo:storm          # headless dispose-storm retention lane (lite-leak, size 0)
+```
+
+The `demo/` directory is dev-only -- it never enters `package.json` `files[]` and never ships to consumers.
 
 ---
 
@@ -430,12 +488,45 @@ Native (untranspiled) `@` decorators in engines: not shipped anywhere yet -- unt
 
 ---
 
+## Migrating from MobX 7 & signal-utils
+
+The decorator vocabulary maps almost one-to-one; what changes is the lifetime story. Both libraries below leave teardown to the garbage collector -- this package makes it a single deterministic call.
+
+### From MobX 7
+
+| MobX 7 | lite-signal-decorators |
+|---|---|
+| `@observable accessor x` | `@reactive accessor x` |
+| `@computed get y()` | `@derived get y()` |
+| `@action m()` | `@batched m()` |
+| `makeObservable(this, {...})` | `@reactiveHost` -- one wiring site, no mirror object to keep in sync |
+| `reaction(...)` / `autorun(...)` | `@reactiveEffect m()` |
+| reaction disposers only; the instance itself is never disposable | **`disposeReactive(vm)` -- one call, idempotent, node-exact, and every later touch throws by name. MobX has no equivalent; its per-instance graph ends when the collector decides.** |
+
+### From signal-utils
+
+Verified against the installed `signal-utils@0.21.1`: `@signal` (on accessors or getters) and `@cached` (on getters) are the two decorators in its surface.
+
+| signal-utils 0.21 | lite-signal-decorators |
+|---|---|
+| `@signal accessor x` (or `@signal get x`) | `@reactive accessor x` |
+| `@cached get y()` | `@derived get y()` |
+| no disposal API at all | `disposeReactive(vm)` -- **and it disposes**: cascade teardown, poison swap, node-exact conservation |
+| Stage-3 build required | `defineReactive(Class, spec)` -- the buildless door signal-utils has no equivalent for |
+
+The cross-framework numbers behind this table are stamped in [`decisions/0006-kill-criteria.md`](decisions/0006-kill-criteria.md) (both engines measured through their documented class APIs at checksum-identical work).
+
+---
+
 ## What this is not
 
 - **Not a home for module-level or global signals.** That is raw `lite-signal` territory; `static` members are rejected by design.
+- **Not a deep/proxy observation layer.** No `observable.deep`, no wrapped Arrays/Maps/Sets, no proxy magic -- the reactive unit is a declared member, not a traversed object graph. Collections are `@zakkster/lite-project` territory.
 - **Not a per-frame action system.** `@batched` costs a measured thunk per call -- fine for "one call per user intent", wrong inside a render loop. Per-frame hot lanes stay on plain accessor writes (and frame *scheduling* belongs to `lite-raf`).
 - **Not a framework, renderer, or component model.** It ends at the reactive view-model; DOM binding is `lite-signal-dom`'s job.
-- **Not a MobX API shim.** No `makeObservable`, no administration objects, no proxy magic -- and no GC-based cleanup: disposal is explicit, deterministic, and verified, because "the collector will get it eventually" is not a lifecycle.
+- **Not a general meta-programming kit.** Five decorators, one wiring law -- not an open decorator toolbox. It does one thing: turn a class into a reactive view-model with a provable lifetime.
+- **Not a MobX API shim.** No `makeObservable`, no administration objects -- and no GC-based cleanup: disposal is explicit, deterministic, and verified, because "the collector will get it eventually" is not a lifecycle.
+- **Not a legacy-decorators consumer.** TypeScript `experimentalDecorators` emit is detected by call shape at decoration time and rejected with a named error -- never "works differently under legacy".
 - **Not usable as `@` syntax without a toolchain** -- that is exactly what `defineReactive` exists for.
 
 ---
@@ -448,6 +539,7 @@ Native (untranspiled) `@` decorators in engines: not shipped anywhere yet -- unt
 | `@zakkster/lite-signal-dom` | DOM bindings for the same engine -- where a view-model meets actual elements. |
 | `@zakkster/lite-raf` | Frame-rate scheduling for the same graph; the frame-coalescing pattern the `scheduler` option on `@reactiveEffect` exists to plug into. |
 | `@zakkster/lite-devtools` | Graph inspection; `rootOf(vm)` + `forEachOwned` is the hook it walks. |
+| [`@zakkster/lite-watch-ex`](https://www.npmjs.com/package/@zakkster/lite-watch-ex) | One-shot / predicate-gated / pausable watchers over the same engine; thunk sources, default-registry effects -- see the [registry note](#composability) before pointing one at a decorated member. |
 | `@zakkster/lite-leak` + `@zakkster/lite-gc-profiler` | The dev-side harness that proves every retention and allocation claim in this README. Never shipped to consumers. |
 
 ---
@@ -484,7 +576,7 @@ Because an instance whose base-class boxes live in one pool and whose subclass b
 No, and the README says so with numbers: 22.12 ns/op vs 15.25 raw vs 11.67 unbatched on the reference rig -- a thunk + rest-array per call. Use it for actions; keep per-frame writes on plain accessors.
 
 **Where are `costOf`, labels, the audit hook, private members?**
-The first three landed in 0.4.0 -- `costOf`/`capacityFor` (measured capacity accounting), `enableLabels`/`labelOf` (devtools identity), and `auditReactive` (leak audit), all cold-path or opt-in with the hot canon untouched. Private-member support remains out. The `llms.txt` scope note tracks exactly what is and isn't included.
+All three are part of the frozen 1.0.0 surface -- `costOf`/`capacityFor` (measured capacity accounting), `enableLabels`/`labelOf` (devtools identity), and `auditReactive` (leak audit), all cold-path or opt-in with the hot canon untouched. Private-member support remains out. The `llms.txt` scope note tracks exactly what is and isn't included.
 
 ---
 

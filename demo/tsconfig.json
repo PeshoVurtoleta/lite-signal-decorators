@@ -1,0 +1,17 @@
+{
+  "//": "Demo-only typecheck config (never shipped). Stage-3 decorators: experimentalDecorators MUST be false. Run: npx tsc -p demo/tsconfig.json --noEmit",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022", "DOM"],
+    "experimentalDecorators": false,
+    "useDefineForClassFields": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowJs": false,
+    "types": []
+  },
+  "include": ["src/**/*.ts"]
+}

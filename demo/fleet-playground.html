@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="A live reactive-class fleet driven by the real source of @zakkster/lite-signal-decorators: an enforced-capacity custom registry, per-instance dispose, zero per-frame allocation, and lite-watch-ex telemetry on a separate plane.">
+<title>lite-signal-decorators - fleet playground</title>
+</head>
+<body>
+<style>
+    /* ============================================================
+       lite-signal-decorators - fleet instrument console
+       Palette: cool cyan = FLEET (Plane A, the enforced registry),
+       warm amber = TELEMETRY (Plane B, lite-watch-ex). green/red are
+       health semantics (zero-alloc / the capacity ceiling), kept off
+       the two accents so state reads at a glance. The viewport is a
+       dark instrument screen in both themes; chrome is theme-aware.
+       Colors: hex first, oklch() second. rem by default. Every :hover
+       is wrapped in @media (hover: hover).
+       ============================================================ */
+    :root {
+        --ink: #0a0f1c;
+        --panel: #0f1a2e;
+        --panel-2: #0c1526;
+        --line: #21324b;
+        --text: #e9eff8;
+        --text-mut: #8595b0;
+        --text-dim: #5f6f8c;
+        --fleet: #43b4e4;
+        --fleet-soft: rgba(67, 180, 228, 0.13);
+        --tel: #ffb454;
+        --good: #4fd6a3;
+        --warn: #ffcf5c;
+        --bad: #ff6b6b;
+        --viewport: #060a12;
+        --grid: rgba(67, 180, 228, 0.07);
+        --shadow: 0 1px 0 rgba(255, 255, 255, 0.02), 0 12px 34px -18px rgba(0, 0, 0, 0.8);
+        --radius: 0.75rem;
+        --radius-sm: 0.5rem;
+        --mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+        --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    :root { color: var(--fleet); color: oklch(0.72 0.11 230); }
+
+    @media (prefers-color-scheme: light) {
+        :root {
+            --ink: #eef1f7;
+            --panel: #ffffff;
+            --panel-2: #f5f7fc;
+            --line: #d8deea;
+            --text: #131a29;
+            --text-mut: #56637d;
+            --text-dim: #8b97ac;
+            --fleet: #0e7fb8;
+            --fleet-soft: rgba(14, 127, 184, 0.10);
+            --tel: #c56a08;
+            --good: #0f8a5c;
+            --warn: #b7791f;
+            --bad: #cf3a3a;
+            --shadow: 0 1px 0 rgba(255, 255, 255, 0.6), 0 14px 30px -20px rgba(20, 30, 60, 0.35);
+        }
+    }
+
+    :root[data-theme="dark"] {
+        --ink: #0a0f1c; --panel: #0f1a2e; --panel-2: #0c1526; --line: #21324b;
+        --text: #e9eff8; --text-mut: #8595b0; --text-dim: #5f6f8c;
+        --fleet: #43b4e4; --tel: #ffb454; --good: #4fd6a3; --warn: #ffcf5c; --bad: #ff6b6b;
+    }
+    :root[data-theme="light"] {
+        --ink: #eef1f7; --panel: #ffffff; --panel-2: #f5f7fc; --line: #d8deea;
+        --text: #131a29; --text-mut: #56637d; --text-dim: #8b97ac;
+        --fleet: #0e7fb8; --tel: #c56a08; --good: #0f8a5c; --warn: #b7791f; --bad: #cf3a3a;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+        background: var(--ink);
+        color: var(--text);
+        font-family: var(--sans);
+        -webkit-font-smoothing: antialiased;
+        line-height: 1.5;
+    }
+
+    .wrap {
+        max-width: 78rem;
+        margin: 0 auto;
+        padding: clamp(0.9rem, 2.2vw, 1.6rem);
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .masthead { display: flex; align-items: center; gap: 1.1rem; flex-wrap: wrap; }
+    .brand { display: flex; flex-direction: column; gap: 0.2rem; margin-right: auto; }
+    .wordmark {
+        font-family: var(--mono);
+        font-weight: 700;
+        font-size: clamp(1.05rem, 2.4vw, 1.45rem);
+        letter-spacing: -0.01em;
+        margin: 0;
+    }
+    .wordmark .dim { color: var(--text-dim); font-weight: 400; }
+    .wordmark .a { color: var(--fleet); }
+    .tagline { color: var(--text-mut); font-size: 0.8rem; }
+
+    .btn {
+        font: inherit;
+        font-size: 0.82rem;
+        color: var(--text);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        padding: 0.4rem 0.8rem;
+        cursor: pointer;
+        touch-action: manipulation;
+    }
+    .btn.accent { border-color: var(--fleet); color: var(--fleet); }
+    .btn.danger { border-color: var(--bad); color: var(--bad); }
+    @media (hover: hover) {
+        .btn:hover { background: var(--panel-2); }
+        .btn.accent:hover { background: var(--fleet-soft); }
+    }
+
+    .grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.6fr) minmax(15rem, 1fr);
+        gap: 1rem;
+    }
+    @media (max-width: 52rem) { .grid { grid-template-columns: 1fr; } }
+
+    .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        padding: 0.9rem;
+    }
+    .card h2 {
+        margin: 0 0 0.6rem;
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-mut);
+        font-weight: 600;
+    }
+
+    #scene {
+        display: block;
+        width: 100%;
+        aspect-ratio: 16 / 10;
+        background: var(--viewport);
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--line);
+        touch-action: none;
+    }
+
+    .controls { display: flex; flex-direction: column; gap: 0.8rem; }
+    .row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+    .field { display: flex; flex-direction: column; gap: 0.25rem; }
+    .field label {
+        font-size: 0.7rem; color: var(--text-mut);
+        text-transform: uppercase; letter-spacing: 0.06em;
+        display: flex; justify-content: space-between; gap: 0.5rem;
+    }
+    .field label b { color: var(--fleet); font-family: var(--mono); }
+    input[type="range"] { width: 100%; accent-color: var(--fleet); }
+
+    .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; }
+    .stat-grid.spaced { margin-top: 0.7rem; }
+    .stat { display: flex; flex-direction: column; gap: 0.15rem; }
+    .stat .k { font-size: 0.66rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+    .stat .v { font-family: var(--mono); font-size: 1.1rem; font-weight: 600; }
+    .stat .v small { font-size: 0.62rem; color: var(--text-mut); font-weight: 400; }
+    .v.fleet { color: var(--fleet); }
+    .v.tel { color: var(--tel); }
+    .v.good { color: var(--good); }
+
+    .popbar {
+        height: 0.6rem;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        overflow: hidden;
+        margin-top: 0.3rem;
+    }
+    .popbar > i {
+        display: block;
+        height: 100%;
+        width: 0%;
+        background: var(--fleet);
+        transition: width 0.12s linear;
+    }
+    .popbar.hot > i { background: var(--bad); }
+
+    #spark {
+        display: block;
+        width: 100%;
+        height: 3rem;
+        border-radius: var(--radius-sm);
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+    }
+
+    .alert {
+        margin-top: 0.6rem;
+        font-size: 0.76rem;
+        font-family: var(--mono);
+        padding: 0.4rem 0.6rem;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--line);
+        color: var(--text-mut);
+        background: var(--panel-2);
+    }
+    .alert.fired { border-color: var(--warn); color: var(--warn); }
+    .alert.err { border-color: var(--bad); color: var(--bad); }
+
+    .legend { font-size: 0.68rem; color: var(--text-dim); display: flex; gap: 0.9rem; flex-wrap: wrap; }
+    .legend .dot { display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 999px; vertical-align: middle; margin-right: 0.3rem; }
+    .dot.fleet { background: var(--fleet); }
+    .dot.tel { background: var(--tel); }
+
+    .foot { color: var(--text-dim); font-size: 0.72rem; }
+    .foot code { font-family: var(--mono); color: var(--text-mut); }
+</style>
+
+<div class="wrap">
+    <header class="masthead">
+        <div class="brand">
+            <h1 class="wordmark"><span class="a">lite-signal-decorators</span> <span class="dim">/ fleet playground</span></h1>
+            <span class="tagline">Plane A: an enforced-capacity registry of decorated VMs. Plane B: lite-watch-ex telemetry. Zero per-frame allocation.</span>
+        </div>
+        <button class="btn" id="btnTheme" type="button" aria-label="Toggle theme">theme</button>
+    </header>
+
+    <div class="grid">
+        <section class="card">
+            <h2>Fleet viewport (Plane A)</h2>
+            <canvas id="scene" width="960" height="600"></canvas>
+            <p class="legend">
+                <span><i class="dot fleet"></i>fleet entity (custom registry, per-instance dispose)</span>
+                <span><i class="dot tel"></i>telemetry driven by lite-watch-ex (default registry)</span>
+            </p>
+        </section>
+
+        <aside class="controls">
+            <section class="card">
+                <h2>Controls</h2>
+                <div class="controls">
+                    <div class="field">
+                        <label for="spawnRate">Spawn batch <b id="spawnVal">64</b></label>
+                        <input type="range" id="spawnRate" min="1" max="512" step="1" value="64">
+                    </div>
+                    <div class="field">
+                        <label for="killRate">Kill batch <b id="killVal">64</b></label>
+                        <input type="range" id="killRate" min="1" max="512" step="1" value="64">
+                    </div>
+                    <div class="row">
+                        <button class="btn accent" id="btnSpawn" type="button">spawn</button>
+                        <button class="btn" id="btnKill" type="button">kill</button>
+                        <button class="btn" id="btnPause" type="button">pause</button>
+                    </div>
+                    <div class="row">
+                        <button class="btn danger" id="btnStorm" type="button">dispose storm</button>
+                    </div>
+                </div>
+                <div class="alert" id="tAlert">capacity alert armed (watchUntil, one-shot)</div>
+            </section>
+
+            <section class="card">
+                <h2>Population vs budget (world.stats)</h2>
+                <div class="stat-grid">
+                    <div class="stat"><span class="k">live</span><span class="v fleet" id="tPop">0</span></div>
+                    <div class="stat"><span class="k">budget N_MAX</span><span class="v" id="tBudget">0</span></div>
+                    <div class="stat"><span class="k">active nodes</span><span class="v fleet" id="tNodes">0</span></div>
+                    <div class="stat"><span class="k">active links</span><span class="v fleet" id="tLinks">0</span></div>
+                </div>
+                <div class="popbar" id="popBar"><i id="popFill"></i></div>
+            </section>
+
+            <section class="card">
+                <h2>Telemetry (Plane B)</h2>
+                <canvas id="spark" width="520" height="96"></canvas>
+                <div class="stat-grid spaced">
+                    <div class="stat"><span class="k">fps</span><span class="v good" id="tFps">0</span></div>
+                    <div class="stat"><span class="k">frame</span><span class="v tel" id="tFrame">0<small>ms</small></span></div>
+                    <div class="stat"><span class="k">effect fires</span><span class="v tel" id="tEffect">0</span></div>
+                    <div class="stat"><span class="k">churn/s delta</span><span class="v tel" id="tChurn">0</span></div>
+                </div>
+            </section>
+        </aside>
+    </div>
+
+    <p class="foot">
+        Watchers on Plane B: <code>watchUntil</code> (capacity one-shot),
+        <code>pausableWatch</code> (frame sample, fireOnResume),
+        <code>watchChanged</code> (population), <code>watchMany</code> (fps+frame+pop),
+        <code>watchPrevious</code> (churn delta). No watcher source reads a Plane A member.
+        Append <code>#profile</code> to the URL to arm the lite-layout-profiler dev instrument.
+    </p>
+</div>
+
+<script type="module" src="./bundle.js"></script>
+
+<script type="module">
+    // lite-layout-profiler -- DEV instrument (demo-audit skill). Dormant unless
+    // #profile is set: a normal load never imports it and pays zero cost. It
+    // ALLOCATES (Error.stack per violation) and patches ~400 prototype setters,
+    // so it is never bundled and never in package.json files[]. A clean demo
+    // reports violationCount === 0; call __layout.destroy() to unpatch.
+    if (location.hash === "#profile") {
+        import("@zakkster/lite-layout-profiler").then((m) => {
+            window.__layout = m.createLayoutProfiler({ warnToConsole: true });
+            console.info("[layout] armed -- drive every control + the frame loop, then read window.__layout.summary(); destroy() to unpatch.");
+        }).catch((e) => {
+            console.warn("[layout] lite-layout-profiler did not resolve (dev-only, no import map): " + e.message);
+        });
+    }
+</script>
+</body>
+</html>

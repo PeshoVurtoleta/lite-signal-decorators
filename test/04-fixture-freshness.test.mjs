@@ -10,10 +10,12 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { renderEmitMatrix } from "./fixtures/emit-matrix.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIX = join(HERE, "fixtures");
 const SRC = join(FIX, "src");
+const README = join(HERE, "..", "README.md");
 
 function sha256(file) {
     return createHash("sha256").update(readFileSync(file)).digest("hex");
@@ -55,5 +57,21 @@ test("compiled fixtures are fresh vs hashes.json (else run `npm run fixtures`)",
         drift.length,
         0,
         "fixture drift detected -- run `npm run fixtures`:\n  " + drift.join("\n  "),
+    );
+});
+
+test("README emit-support matrix matches the generator (else regenerate the block)", () => {
+    const readme = readFileSync(README, "utf8");
+    const start = "<!-- EMIT-MATRIX:START -->";
+    const end = "<!-- EMIT-MATRIX:END -->";
+    const i = readme.indexOf(start);
+    const j = readme.indexOf(end);
+    assert.ok(i !== -1 && j !== -1 && j > i, "README emit-matrix markers are missing");
+    const block = readme.slice(i + start.length, j).replace(/^\n/, "").replace(/\n$/, "");
+    assert.equal(
+        block,
+        renderEmitMatrix(),
+        "README emit-support matrix is stale -- regenerate it from " +
+            "test/fixtures/emit-matrix.mjs (a fixture hash or toolchain version moved)",
     );
 });

@@ -1,3 +1,5 @@
 /node_modules/
 /package-lock.json
 /bench/node_modules/
+/demo/dist/
+/Publications/

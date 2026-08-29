@@ -1,6 +1,6 @@
 # @zakkster/lite-signal-decorators
 
-VERSION 0.4.0
+VERSION 1.0.0
 
 > Stage-3 decorator layer over @zakkster/lite-signal. Turns a plain class into a
 > reactive view-model where each instance has a measured per-property cost, a
@@ -68,7 +68,7 @@ slot for a poison handle, so any later read/write throws a named
   `FinalizationRegistry` reports any instance GC'd without `disposeReactive`.
 - `ReactiveDisposedError` -- `extends Error`, `name` `"ReactiveDisposedError"`,
   fields `className` and `key`.
-- `VERSION` -- `"0.4.0"`.
+- `VERSION` -- `"1.0.0"`.
 
 ## Registry law (one registry per host chain)
 
@@ -185,14 +185,26 @@ throw a named error.
 Requires `@zakkster/lite-signal` `>=1.5.0 <2.0.0` (peer dependency). Uses
 `signalBox`, `computedBox`, `effect`, `createRoot`, `getOwner`, `runWithOwner`,
 `dispose`, `nodeId`, `isTracking`, `batch`, and `untrack` from it (all 11 also
-routed per-registry via `createRegistry()`).
+routed per-registry via `createRegistry()`). The RANGE floor is 1.5.0 and stays
+1.5.0 -- everything the runtime surface needs shipped in 1.5.0 stable. Two
+forward-compat torture scenarios are feature-detected above that floor and SKIP
+below it (a skip below the floor is correct; at or above it is a failure): the
+`createScope` adoption scenario needs peer 1.6.0, and the engine
+`[Symbol.dispose]`/`using` interop scenario needs peer 1.9.0. Neither is a
+runtime requirement -- the shipped surface runs on 1.5.0.
 
 ## Scope note
 
-0.4.0 adds the S4 introspection surface -- 16 exports: the 11 runtime
-exports plus `costOf`, `capacityFor`, `enableLabels`, `labelOf`, and
-`auditReactive` (all cold / opt-in; the hot accessor canon is byte-identical to
-0.3.0). Also present since 0.3.0: the dev-side class-reactivity benchmark
-(`bench/`, private, never shipped) and the fleet-soak torture scenario; the
-formal kill-criteria verdicts live in decisions/0006-kill-criteria.md. Not yet
-included: private-member support.
+1.0.0 FREEZES the export surface -- 16 exports: the 11 runtime exports plus
+`costOf`, `capacityFor`, `enableLabels`, `labelOf`, and `auditReactive` (all
+cold / opt-in; the hot accessor canon is byte-identical to 0.3.0). The semver
+promise from here: any change to an existing export's signature or behavior is a
+MAJOR, recorded in a decision file; new exports are minors; the hot accessor
+canon (`makeGet`/`makeSet`) does not move without a major. Also present since
+0.3.0: the dev-side class-reactivity benchmark (`bench/`, private, never
+shipped) and the fleet-soak torture scenario; the formal kill-criteria verdicts
+live in decisions/0006-kill-criteria.md. Still OUT of the 1.0 surface (each a
+deliberate, documented exclusion, not an oversight): private (`#`) members,
+static members, module/global signals (raw lite-signal territory), and any
+instance reinitialization / pooling API -- an instance is single-lifetime,
+disposed once, never revived.

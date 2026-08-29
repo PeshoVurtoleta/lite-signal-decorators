@@ -4,6 +4,88 @@ All notable changes to `@zakkster/lite-signal-decorators` are documented here.
 The format follows Keep a Changelog; this project adheres to Semantic
 Versioning.
 
+## [1.0.0] - 2026-08-29
+
+The 1.0 release: docs freeze, the fleet playground, and the standing pre-publish
+gate. Zero runtime changes -- the 16-export surface ships byte-identical to
+0.4.0 (the hot accessor canon is review-diffed to a zero-line diff), and this
+release freezes that surface under semver: any later signature change is a major
+recorded in a decision file. Dist-tag `latest`. Stage gate, measured at
+closeout by the full section-10 chain (archived verbatim below): 214/214 tests
+on both lanes; torture 15 scenarios (13 pass + the two forward-compat scenarios
+legitimately skipping under the installed 1.5.0 peer) with 15/15 sabotage
+controls breaking as required; the peer-preview lane SUITE-GREEN per tag
+(15/15, forward scenarios RUNNING) against lite-signal 1.9.0-preview.6 AND
+1.9.0-canary.1; the bench sink self-test catching its sabotaged adapter; pack 7
+files, no `demo/` or `Publications/`.
+
+### Added
+
+- The fleet-playground demo (`demo/`, dev-only, never in `files[]`): a
+  single-file instrument console over a two-plane architecture -- Plane A a
+  decorated entity-VM fleet in a `capacityFor`-sized custom registry with
+  enforced ceilings, Plane B the telemetry signals in the default registry
+  driving five `@zakkster/lite-watch-ex` watchers (`watchUntil`,
+  `pausableWatch`, `watchChanged`, `watchMany`, `watchPrevious`). The DOM-free
+  core runs headless under the same GC-budget and dispose-storm gates the
+  library uses; the PD-29 registry wall is proven by a stats-delta (no watcher
+  ever forms an edge into the custom-registry fleet), not by assertion.
+- README migration section: MobX 7 and signal-utils translation tables,
+  including the closing row MobX cannot write -- `disposeReactive(vm)` is one
+  idempotent, node-exact call after which every later touch throws by name.
+- README emit-support matrix, generated from `test/fixtures/hashes.json` (9
+  entries) under drift-proof `EMIT-MATRIX` markers; `04-fixture-freshness`
+  asserts the README block equals the generator, so a re-emit that changes a
+  byte is loud, not silent.
+- `llms.txt` per-feature forward floors documented alongside the peer range:
+  1.6.0 for `createScope`, 1.9.0 for `Symbol.dispose`; the peer range floor
+  stays `>=1.5.0 <2.0.0`.
+- `gate` script (`test/gate.mjs`): the section-10 pre-publish chain as captured
+  child processes -- fixtures, test, test:gc, torture (semantic + soak),
+  the TORTURE_BREAK control sweep, the non-blocking peer-preview lane,
+  the bench sink self-test, and `npm pack --dry-run` asserting exactly 7 files.
+  Every blocking step exits 0 or the gate exits non-zero; peer-preview is
+  reported, never gated.
+- `Publications/` (dev-only, never shipped): per-channel release drafts and the
+  GitHub release notes, centered on the class-reactivity benchmark methodology
+  with an explicit invitation for competitor adapter PRs.
+
+### Changed
+
+- Docs re-stamped to reality: Testing sections now read 214 tests across
+  fourteen files and 15 torture scenarios (13 run + 2 floor-gated skips), and
+  every numeric claim traces to a live stamp (`bench/results.txt`,
+  `decisions/0006`, or a gate tail). Version references across README and
+  llms.txt move to 1.0.0.
+- The 16-export surface is frozen under semver at 1.0.0. The 0.x "frozen for
+  0.x" note is retired in favor of the semver promise.
+
+### Fixed
+
+- (Found in review, pass 1 charge C4) An inline-style violation in the demo
+  HTML -- a non-custom-property `style=` attribute against the demo CSS law --
+  was hoisted into the stylesheet. Custom-property `style="--var: value"` hooks
+  remain, per the law.
+- (Found in the planner audit) The Testing and gates sections carried
+  0.2.0-era numbers (171 tests, "12/12 scenarios", an 11-row file table) two
+  stages stale, in violation of the no-claim-without-a-stamp rule. Re-stamped
+  against the 1.0.0 tree.
+
+### Gate output (section-10 chain, archived verbatim)
+
+```
+  fixtures              OK       exit 0 -- emit fixtures regenerated
+  test                  OK       exit 0 -- 214 pass / 0 fail
+  test:gc               OK       exit 0 -- 214 pass / 0 fail
+  torture               OK       exit 0 -- 13 passed, 2 skipped, 0 warned, 0 failed in 32.7s
+  torture:controls      OK       exit 0 -- 15 passed, 0 skipped, 0 warned, 0 failed in 1.9s
+  torture:peer-preview  REPORTED NON-BLOCKING -- lane completed (exit 0) [preview 1.9.0-preview.6 SUITE-GREEN 15 passed, 0 skipped, 0 warned, 0 failed; canary 1.9.0-canary.1 SUITE-GREEN 15 passed, 0 skipped, 0 warned, 0 failed]
+  bench:selftest        OK       exit 0 -- ALL PASS -- 22 passed, 0 failed
+  pack                  OK       exit 0 -- 7/7 files, no demo/ no Publications/
+----------------------------------------------------------------------
+  GATE PASS -- 7 blocking steps + 1 non-blocking (peer-preview)
+```
+
 ## [0.4.0] - 2026-08-26
 
 The introspection release: the surface grows 11 -> 16, every addition cold-path
@@ -276,6 +358,7 @@ Initial release -- the decorator core.
 - Torture skeleton (`@zakkster/lite-leak` + `@zakkster/lite-gc-profiler`):
   retention, conservation, lifecycle, and zero-GC lanes.
 
+[1.0.0]: https://github.com/PeshoVurtoleta/lite-signal-decorators/releases/tag/v1.0.0
 [0.4.0]: https://github.com/PeshoVurtoleta/lite-signal-decorators/releases/tag/v0.4.0
 [0.3.0]: https://github.com/PeshoVurtoleta/lite-signal-decorators/releases/tag/v0.3.0
 [0.2.0]: https://github.com/PeshoVurtoleta/lite-signal-decorators/releases/tag/v0.2.0
