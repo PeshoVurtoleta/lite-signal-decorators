@@ -175,4 +175,17 @@ not lower the helper's admission bar.
 - Hot canon `git diff HEAD`: `makeGet`/`makeSet`/`makeDerivedGet` empty;
   `wireInstance` body empty.
 
+## Addendum 2026-08-30 -- standards-watch correction
+
+The native-decorator watch paragraph above recorded proposal-decorators as
+"still Stage 3". Verified against tc39/proposals on 2026-08-30: Decorators
+and Decorator Metadata are listed at **Stage 2.7** -- moved at the 2026-05
+plenary (agenda item "Decorators for Stage 2.7") after holding Stage 3 since
+2022-03. Functional impact zero: TS 5.x standard emit and Babel 2023-11
+implement the same protocol and remain the only emitters; no engine ships
+native decorators; the native-emit-lane trigger is unchanged (test262 is now
+the explicit gate back to 3). The shipped docs' "Stage-3" phrasing is
+imprecise as of 2026-05; that accuracy pass is owner-gated (tarball docs need
+a version to carry them). Full record: research/feature-gap-2026-08-30.md.
+
 MIT (c) Zahary Shinikchiev <shinikchiev@yahoo.com>
