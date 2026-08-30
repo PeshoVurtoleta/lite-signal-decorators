@@ -1,0 +1,144 @@
+{
+  "_stamp": "CB-T1 verification artifact for @zakkster/lite-signal-decorators COOKBOOK.md. Checked-in allowlist per PD-39: package -> { version, source, probed, symbols }. Every cross-package symbol cited by any recipe or POINTER block MUST appear here. Vendored into the repo so test/15-cookbook.test.mjs never reads outside the package directory. Facts resolved fail-closed on 2026-08-30 by source citation plus a runnable probe; nothing guessed. ASCII only.",
+  "_verdicts": {
+    "a_lite_store_binds_helpers_and_registry": "default-registry-only (PD-29 wall applies). Store.js:34 imports { signal, batch, dispose, isTracking, untrack } from @zakkster/lite-signal at module load; Store.js:141 calls signal(value) with NO registry argument; grep for 'registry' over Store.js returns zero matches. Top-level signal delegates to defaultRegistry.signal (lite-signal Signal.js:1904-1906, bound to `let defaultRegistry = createRegistry()` at :1898). Probe (scratchpad/probe-a.mjs): a default-registry effect reading a store key re-ran on every mutation (seen 1 -> 2 -> 3); a custom createRegistry() effect reading the same key ran once at init and NEVER re-ran (customSeen stuck at 1). Lazily-created per-key property signals land in the DEFAULT registry only. r6 inherits the PD-29 wall verbatim.",
+    "b_lite_store_signatures": "Read from Store.d.ts. store(initial) / unwrap(s) / snapshot(s) / dispose(s) / reconcile(s, next, opts?) with opts.key?: string | ((item)=>unknown). See lite-store symbols below.",
+    "c_lite_arena_surface": "Read from Arena.d.ts. arena.registerComponent(schema, options?) -> SparseSet; SparseSet exposes .data (parallel SoA TypedArrays), .dense (Int32Array of live handles), .count, .add/.remove/.has/.idx, and the worker round-trip pair .detach(keys?)/.rebind(buffers)/.isDetached. Spawn/kill are Arena.spawn():Entity and Arena.despawn(entity):boolean. See lite-arena symbols below.",
+    "d_lite_await_fromPromise_and_whenSignal": "fromPromise(promise, initialData?) returns Signal<AsyncState<T>> where AsyncState is the three-state union { status:'pending'|'resolved'|'rejected', data, error }. The signal is created via `signal as _signal` imported top-level (Await.js:19, called at :998) -> lands in the DEFAULT registry (same PD-29 wall). whenSignal(source, predicate, opts?) exists and returns Promise<T>; resolves with the first satisfying value, cleans its effect on settle.",
+    "e_lite_signal_dom_keyed_peer_floor": "CARD IS STALE; lite-signal 1.5.0 stable suffices. SignalDom.js:23 imports { effect, getOwner, runWithOwner } from @zakkster/lite-signal at module load; the source comment at SignalDom.js:629 states 'getOwner/runWithOwner require lite-signal >= 1.5.0'. Both are exported by the lite-signal 1.5.0 installed here: Signal.js exports getOwner (~:1947) and runWithOwner (~:1958). lite-signal-dom peerDependency is ^1.5.0-rc.1 (package.json:60), satisfied by 1.5.0 stable and by this package's 1.5.0 peer floor. The catalog card's 'runWithOwner only on rc dist-tag, latest still 1.4.x' is outdated. keyed() stays a POINTER in r4 only because it needs a DOM lane this package lacks, NOT because of an unmet peer."
+  },
+  "@zakkster/lite-store": {
+    "version": "1.2.0",
+    "npm_latest": "1.2.0",
+    "source": "/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteStore/Store.js",
+    "dts": "/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteStore/Store.d.ts",
+    "probed": "2026-08-30",
+    "registry_verdict": "default-registry-only (PD-29 wall applies)",
+    "symbols": [
+      { "name": "store", "signature": "store<T extends object>(initial: T): T", "note": "Store.js:570 / Store.d.ts:18. Returns a Proxy typed as the initial value. Per-key value signals are allocated LAZILY on first tracked read (Store.js:284-285) in the DEFAULT registry; a plain read outside a reactive context allocates nothing." },
+      { "name": "unwrap", "signature": "unwrap<T>(s: T): T", "note": "Store.js:591 / Store.d.ts:26. Returns the underlying raw target; pass-through if s is not a store." },
+      { "name": "snapshot", "signature": "snapshot<T>(s: T): T", "note": "Store.js:610 / Store.d.ts:35. Deep plain-data copy; DEEP-COPIES, so this boundary is NOT zero-GC (r6 states this in its own words)." },
+      { "name": "dispose", "signature": "dispose(s: object): void", "note": "Store.js:647 / Store.d.ts:43. Releases every signal in the store subtree back to the lite-signal pool; mutations after dispose are silent." },
+      { "name": "reconcile", "signature": "reconcile<T extends object>(s: T, next: T, opts?: { key?: string | ((item: any) => unknown) }): T", "note": "Store.js:898 / Store.d.ts:69. Structural diff-apply patching only differing leaves; arrays positional by default, opts.key matches rows by identity. Runs untracked and batched. Throws TypeError on non-store / non-plain / shape-mismatch." },
+      { "name": "signal (captured from lite-signal)", "signature": "import { signal, batch, dispose as disposeSignal, isTracking, untrack } from '@zakkster/lite-signal'", "note": "Store.js:34 module-load capture of top-level lite-signal helpers; signal() called with no registry arg (Store.js:141) -> DEFAULT registry only. This is the (a) finding: lite-store is default-registry-only, exactly the lite-watch-ex PD-29 pattern." }
+    ]
+  },
+  "@zakkster/lite-arena": {
+    "version": "1.9.0",
+    "npm_latest": "1.9.0",
+    "source": "/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteArena/Arena.js",
+    "dts": "/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteArena/Arena.d.ts",
+    "probed": "2026-08-30",
+    "symbols": [
+      { "name": "Arena", "signature": "new Arena(maxEntities: number, opts?: { checked?: boolean })", "note": "Arena.js:206 / Arena.d.ts:89. No auto-grow; spawn() at capacity throws (fail-closed)." },
+      { "name": "Arena.spawn", "signature": "spawn(): Entity", "note": "Arena.d.ts:125. r9 spawn." },
+      { "name": "Arena.despawn", "signature": "despawn(entity: Entity): boolean", "note": "Arena.d.ts:139. O(1) kill; removes the entity from every registered component. r9 kill." },
+      { "name": "Arena.registerComponent", "signature": "registerComponent<T extends Record<string, TypedArrayConstructor>>(schema: T, options?: { buffers?: { [K in keyof T]?: ArrayBufferLike } }): SparseSet<T>", "note": "Arena.js / Arena.d.ts:185-188. Each schema key becomes a parallel TypedArray of length capacity. Registers the set for automatic cleanup on despawn." },
+      { "name": "Arena.registerTag", "signature": "registerTag(): SparseSet<{}>", "note": "Arena.d.ts:196. Zero-payload membership set; data is an empty null-prototype object." },
+      { "name": "Arena.capacity", "signature": "readonly capacity: number", "note": "Arena.d.ts:91." },
+      { "name": "Arena.retiredCount", "signature": "readonly retiredCount: number", "note": "Arena.d.ts:107. Slots retired after generation exhaustion." },
+      { "name": "SparseSet", "signature": "class SparseSet<T extends Record<string, TypedArrayConstructor>>", "note": "Arena.js:761 / Arena.d.ts:275. Prefer arena.registerComponent(schema) over direct construction." },
+      { "name": "SparseSet.data", "signature": "readonly data: ComponentData<T>", "note": "Arena.d.ts:294. Parallel SoA payload; each key is a TypedArray indexable 0..count-1. The two-plane recipe reads/writes columns here per frame." },
+      { "name": "SparseSet.dense", "signature": "readonly dense: Int32Array", "note": "Arena.d.ts:288. Live entity handles; iterate dense[0..count). SIGNED int32 (handles go negative at generation 2048)." },
+      { "name": "SparseSet.count", "signature": "readonly count: number", "note": "Arena.d.ts:277. Number of live members; indices >= count contain stale data." },
+      { "name": "SparseSet.add", "signature": "add(entity: Entity): number", "note": "Arena.d.ts:329. Returns the dense data index, or -1 if the entity is dead." },
+      { "name": "SparseSet.remove", "signature": "remove(entity: Entity): boolean", "note": "Arena.d.ts:335." },
+      { "name": "SparseSet.has", "signature": "has(entity: Entity): boolean", "note": "Arena.d.ts:322." },
+      { "name": "SparseSet.idx", "signature": "idx(entity: Entity): number", "note": "Arena.d.ts:347. Unsafe fast-path dense index; throws in checked mode when the entity is absent." },
+      { "name": "SparseSet.detach", "signature": "detach(keys?: (keyof T & string)[]): ArrayBufferLike[]", "note": "Arena.d.ts:361. Worker round-trip sender half; transferring the returned buffer is what detaches the view. Deferred off-thread recipe only." },
+      { "name": "SparseSet.rebind", "signature": "rebind(buffers: { [K in keyof T]?: ArrayBufferLike }): void", "note": "Arena.d.ts:386. Reattaches transferred buffers; validated fail-closed, no half-applied state." },
+      { "name": "SparseSet.isDetached", "signature": "isDetached(key: keyof T & string): boolean", "note": "Arena.d.ts (cold once-per-frame guard). Reads byteLength === 0." }
+    ]
+  },
+  "@zakkster/lite-await": {
+    "version": "1.2.0",
+    "version_read_from_source": "1.2.0",
+    "npm_latest": "1.1.1",
+    "npm_published_versions": ["1.1.0", "1.1.1"],
+    "install_caveat": "The sibling source read here is 1.2.0 but that version is NOT published; a devDep on @zakkster/lite-await resolves to npm latest 1.1.1. fromPromise and whenSignal are documented since 1.1.0 (catalog card) and are cross-version stable; still, CB-T7 must pin the devDep to a PUBLISHED version (1.1.1) and NOT to 1.2.0.",
+    "source": "/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteAwait/Await.js",
+    "dts": "/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteAwait/Await.d.ts",
+    "probed": "2026-08-30",
+    "registry_verdict": "default-registry-only (fromPromise signal created via top-level signal capture, Await.js:19 / :998)",
+    "symbols": [
+      { "name": "fromPromise", "signature": "fromPromise<T>(promise: Promise<T>, initialData?: T): Signal<AsyncState<T>>", "note": "Await.js:998 / Await.d.ts:245. AsyncState<T> = { status:'pending'; data:T|undefined; error:undefined } | { status:'resolved'; data:T; error:undefined } | { status:'rejected'; data:T|undefined; error:unknown } (Await.d.ts:32-35). The returned signal lands in the DEFAULT registry. Allocates a Promise per call by design (lifecycle boundary, not a frame path) -- r8 is not gated for that reason." },
+      { "name": "whenSignal", "signature": "whenSignal<T>(source: () => T, predicate: (value: T) => unknown, opts?: AwaitOptions): Promise<T>", "note": "Await.d.ts:62. Resolves with the first value where predicate(source()) is truthy; supports timeout and AbortSignal; always cleans the underlying effect on settle. Resolves on the next microtask if already satisfied." }
+    ]
+  },
+  "@zakkster/lite-signal-dom": {
+    "version": "1.2.0",
+    "npm_latest": "1.2.0",
+    "source": "/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignalDom/SignalDom.js",
+    "dts": "/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignalDom/SignalDom.d.ts",
+    "probed": "2026-08-30",
+    "peer_floor_verdict": "card stale; lite-signal 1.5.0 stable suffices (keyed needs getOwner/runWithOwner >= 1.5.0, both present at 1.5.0)",
+    "pointer_only": "needs a DOM lane this package does not have (r4 POINTER)",
+    "symbols": [
+      { "name": "keyed", "signature": "keyed<T>(parent: Node, listGetter: () => T[], keyFn: (item: T) => unknown, renderFn: (item: T, el: Node) => View): () => void", "note": "SignalDom.js:593 / SignalDom.d.ts:127. ECS-style keyed list reconciler, node pooling, zero-GC steady state. Requires lite-signal >= 1.5.0 for getOwner/runWithOwner (SignalDom.js:23 module-load import, comment at :629). peerDependency ^1.5.0-rc.1 (package.json:60). POINTER-only here." }
+    ]
+  },
+  "@zakkster/lite-bvh": {
+    "version": "2.0.0",
+    "npm_latest": "2.0.0",
+    "source": "/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteBvh/Bvh.js",
+    "dts": "/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteBvh/Bvh.d.ts",
+    "probed": "2026-08-30",
+    "pointer_only": "drags a @zakkster/lite-aabb ^2.0.0 peer (package.json:36); r9 spatial-index step runs a uniform-grid stand-in in the companion and shows the tree calls as a POINTER block",
+    "export_correction": "The r9 POINTER cites a CLASS, not createTree/updateLeaf/query free functions. The single top-level export is the class DynamicBVH2D (Bvh.js:41); updateLeaf/query/insertLeaf/removeLeaf are its METHODS. There is no createTree export -- construct with `new DynamicBVH2D(maxNodes)`.",
+    "symbols": [
+      { "name": "DynamicBVH2D", "signature": "new DynamicBVH2D(maxNodes: number)", "note": "Bvh.js:41 / Bvh.d.ts:68. The only class export; flat SoA, O(1) free-list, allocation-free after construction." },
+      { "name": "DynamicBVH2D.insertLeaf", "signature": "insertLeaf(leafAABB: Float32Array, data: number): number", "note": "Bvh.d.ts:84. Returns the new node id; STORE it to call updateLeaf/removeLeaf. data must be a non-negative integer." },
+      { "name": "DynamicBVH2D.updateLeaf", "signature": "updateLeaf(leaf: number, newAABB: Float32Array, margin: number): number", "note": "Bvh.d.ts:152. Re-insert with fattening margin; RETURNS a (possibly new) node id -- the REASSIGN-the-returned-id contract r9 states in prose." },
+      { "name": "DynamicBVH2D.removeLeaf", "signature": "removeLeaf(leaf: number): void", "note": "Bvh.d.ts:133." },
+      { "name": "DynamicBVH2D.query", "signature": "query(queryAABB: Float32Array, outBuffer: Int32Array): number", "note": "Bvh.d.ts:166. Iterative, zero-allocation; writes match user-data into outBuffer and returns the count. Fail-closed: never silently grows -- overflow of the fixed queryStack throws." },
+      { "name": "DynamicBVH2D.queryPoint", "signature": "queryPoint(x: number, y: number, outBuffer: Int32Array): number", "note": "Bvh.d.ts:180. Point-pick variant." }
+    ]
+  },
+  "@zakkster/lite-signal": {
+    "version": "1.5.0",
+    "npm_latest": "1.5.0",
+    "source": "node_modules/@zakkster/lite-signal",
+    "probed": "2026-08-30",
+    "note": "Installed peer + devDep (package.json:86,97). Only the names the cookbook corpus imports are listed; the full surface is the package's own llms.txt.",
+    "symbols": [
+      { "name": "createRegistry", "note": "Bound reactive registry factory; r1/r9/r10 size one from capacityFor(...) and host their fleets on it." },
+      { "name": "effect", "note": "Reactive effect; r1 tracks each instance from inside a short-lived effect so reclamation is deterministic." },
+      { "name": "forEachOwned", "note": "Walks the nodes a registry owns; r7 composes it with rootOf + labelOf to serialize a VM." },
+      { "name": "stats", "note": "Default-registry ledger snapshot { activeNodes, totalAllocations, totalDisposals, ... }; r1/r4/r10 read it as the conservation proof." }
+    ]
+  },
+  "@zakkster/lite-watch-ex": {
+    "version": "1.1.0",
+    "npm_latest": "1.1.0",
+    "source": "node_modules/@zakkster/lite-watch-ex",
+    "probed": "2026-08-30",
+    "note": "Installed devDep (package.json:99). Default-registry-only (PD-29 wall): binds lite-signal helpers at module load. r2 watches a VM member from outside via a plain thunk.",
+    "symbols": [
+      { "name": "watch", "note": "watch(source, callback, opts?); source is a plain thunk () => vm.member (never a box handle). r2's outside-in watcher." }
+    ]
+  },
+  "@zakkster/lite-leak": {
+    "version": "1.10.0",
+    "npm_latest": "1.10.0",
+    "source": "node_modules/@zakkster/lite-leak",
+    "probed": "2026-08-30",
+    "note": "Installed devDep (package.json). Retention diagnostic; r1 and r9 prove tracker.size() returns to 0. Held-value contract: neither cleanup nor tag may close over the target.",
+    "symbols": [
+      { "name": "createLeakTracker", "note": "createLeakTracker({ name, onLeak, onWarning }) -> tracker with track/audit/size/registerKernel. r1/r9 retention proof." },
+      { "name": "createOwnerCascadeOrphanKernel", "note": "Kernel that classifies owner-cascade orphans in the reactive tree this package owns; registered by r1." },
+      { "name": "createObserverOrphanKernel", "note": "Kernel that classifies orphaned observers; registered by r9's fleet churn." }
+    ]
+  },
+  "@zakkster/lite-gc-profiler": {
+    "version": "1.16.0",
+    "npm_latest": "1.16.0",
+    "source": "node_modules/@zakkster/lite-gc-profiler",
+    "probed": "2026-08-30",
+    "note": "Installed devDep (package.json:95). Budget instrument for the gated recipes (r1/r2/r4/r5/r9/r10). Node path is precise (perf_hooks); needs node --expose-gc.",
+    "symbols": [
+      { "name": "GcProfiler", "note": "new GcProfiler().start(); sampleHeap(t, heapUsed); summary().gc = { major, minor, maxMs }. The S1 gate reads major/maxMs off summary()." },
+      { "name": "checkNoGc", "note": "checkNoGc(summary, { maxMajor, maxMinor, maxPauseMs }) -> { verdict, violations }. r10's pass/fail verdict." },
+      { "name": "measureOps", "note": "measureOps(fn, { ops, warmup, stabilize? }) -> { bytesPerOp, bracketInverted }. The <= 0.589 B/op steady-state probe." }
+    ]
+  }
+}

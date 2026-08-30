@@ -1,0 +1,113 @@
+{
+  "_stamp": "PD-37 recipe manifest -- @zakkster/lite-signal-decorators cookbook lane. gc: \"gated\" recipes hold the S1 budget (major 0, maxPauseMs 4.0, control-relative minors +128) and carry a COOKBOOK_BREAK sabotage control; steady-state loops additionally gate <= 0.589 B/op (the stamped noise floor), while construction-shaped loops (r1's churn) REPORT bytes/op as honest allocation-light-construction cost, never gated against the steady-state floor. gc: \"none\" REQUIRES a non-empty reason (an empty reason is a runner FAILURE). Authored 2026-08-30.",
+  "recipes": [
+    {
+      "id": "r0",
+      "title": "Just show me what one instance costs",
+      "tier": "start",
+      "companion": "cookbook/r00-instance-cost.mjs",
+      "gc": "none",
+      "reason": "costOf is a cold double-probe that throws rather than guess; sizing is decoration-time work, not a frame path",
+      "cites": []
+    },
+    {
+      "id": "r1",
+      "title": "Prove your teardown",
+      "tier": "basics",
+      "companion": "cookbook/r01-prove-teardown.mjs",
+      "gc": "gated",
+      "reason": "",
+      "cites": ["@zakkster/lite-leak", "@zakkster/lite-gc-profiler", "@zakkster/lite-signal"]
+    },
+    {
+      "id": "r2",
+      "title": "Watching a VM member from outside",
+      "tier": "basics",
+      "companion": "cookbook/r02-watch-from-outside.mjs",
+      "gc": "gated",
+      "reason": "",
+      "cites": ["@zakkster/lite-watch-ex", "@zakkster/lite-signal", "@zakkster/lite-gc-profiler"]
+    },
+    {
+      "id": "r3",
+      "title": "Budgeting a whole app",
+      "tier": "basics",
+      "companion": "cookbook/r03-budget-an-app.mjs",
+      "gc": "none",
+      "reason": "capacityFor is cold sizing done once at boot; the CapacityError it provokes is a boot-time outcome, not a frame path",
+      "cites": ["@zakkster/lite-signal"]
+    },
+    {
+      "id": "r4",
+      "title": "A reactive collection without a node per element",
+      "tier": "working",
+      "companion": "cookbook/r04-collection-without-nodes.mjs",
+      "gc": "gated",
+      "reason": "",
+      "cites": ["@zakkster/lite-gc-profiler", "@zakkster/lite-signal", "@zakkster/lite-signal-dom"]
+    },
+    {
+      "id": "r5",
+      "title": "The rev-stamped deep-subtree boundary",
+      "tier": "working",
+      "companion": "cookbook/r05-rev-stamped-boundary.mjs",
+      "gc": "gated",
+      "reason": "",
+      "cites": ["@zakkster/lite-signal", "@zakkster/lite-gc-profiler"]
+    },
+    {
+      "id": "r6",
+      "title": "The lite-store boundary: document state meets class state",
+      "tier": "working",
+      "companion": "cookbook/r06-lite-store-boundary.mjs",
+      "gc": "none",
+      "reason": "lite-store allocates a property signal lazily on first tracked read and snapshot() deep-copies -- this boundary is NOT zero-GC and the recipe says so in its own words",
+      "cites": ["@zakkster/lite-store", "@zakkster/lite-signal"]
+    },
+    {
+      "id": "r7",
+      "title": "Walking and serializing a VM",
+      "tier": "working",
+      "companion": "cookbook/r07-walk-and-serialize.mjs",
+      "gc": "none",
+      "reason": "labels, rootOf walks and snapshots are cold opt-in audit paths; labels default OFF and the accessor canon is byte-identical either way",
+      "cites": ["@zakkster/lite-signal"]
+    },
+    {
+      "id": "r8",
+      "title": "The async boundary",
+      "tier": "working",
+      "companion": "cookbook/r08-async-boundary.mjs",
+      "gc": "none",
+      "reason": "lite-await allocates a Promise per call by design -- a lifecycle boundary, not a frame path; whenAsync stays refused per PD-30",
+      "cites": ["@zakkster/lite-await"]
+    },
+    {
+      "id": "r9",
+      "title": "Pro: the two-plane fleet",
+      "tier": "pro",
+      "companion": "cookbook/r09-two-plane-fleet.mjs",
+      "gc": "gated",
+      "reason": "",
+      "cites": ["@zakkster/lite-arena", "@zakkster/lite-leak", "@zakkster/lite-gc-profiler", "@zakkster/lite-signal", "@zakkster/lite-bvh"]
+    },
+    {
+      "id": "r10",
+      "title": "Pro: registry isolation, and what refuses to cross",
+      "tier": "pro",
+      "companion": "cookbook/r10-registry-isolation.mjs",
+      "gc": "gated",
+      "reason": "",
+      "cites": ["@zakkster/lite-signal", "@zakkster/lite-gc-profiler"]
+    },
+    {
+      "id": "r11",
+      "title": "Pro: a MobX store, migrated",
+      "tier": "pro",
+      "companion": "cookbook/r11-mobx-migration.mjs",
+      "gc": "none",
+      "reason": "a mixed worked migration that states its cost per layer; the reactive layer is proven elsewhere (r4, r5), the store layer is not zero-GC by r6's published reason",
+      "cites": ["@zakkster/lite-signal", "@zakkster/lite-store"]
+    }
+  ]
+}

@@ -4,6 +4,55 @@ All notable changes to `@zakkster/lite-signal-decorators` are documented here.
 The format follows Keep a Changelog; this project adheres to Semantic
 Versioning.
 
+## [Unreleased]
+
+Repo-only cookbook work over the frozen 1.0.0 surface. No version is minted and
+no runtime file changes: `SignalDecorators.js`, `SignalDecorators.d.ts`, the
+three version sites, `files[]`, and the shipped tarball are byte-identical. To
+fold into the owner's next release entry.
+
+### Added
+
+- `COOKBOOK.md` -- composition recipes over the 1.0 surface, delivered
+  GitHub-only (repo-only, not in `files[]`; decisions/0009): the tarball stays
+  the 7-file runtime surface and the shipped README.md and llms.txt point to the
+  cookbook by absolute GitHub URL.
+- `cookbook/` (dev-only, never shipped): a runnable companion corpus of 12
+  recipes (0-11), six GC-gated with `COOKBOOK_BREAK=<id>` sabotage controls and
+  six ungated each carrying a published reason; plus `cookbook/manifest.json`,
+  the `cookbook/citations.json` cross-package symbol allowlist, and
+  `cookbook/run.mjs` -- the `node --expose-gc` per-recipe runner behind
+  `npm run cookbook` (with `--controls` for the sabotage sweep and `--list`).
+- `test/15-cookbook.test.mjs` -- the drift/parity checker: each fenced block in
+  `COOKBOOK.md` is byte-compared against its tagged companion `#region`,
+  bidirectionally, with a surface-freeze check, a citation check, a static-cost
+  check, and the shipped-doc-link check.
+- `test/gate.mjs` gains a BLOCKING `cookbook` step (the corpus lane plus the
+  `COOKBOOK_BREAK` control sweep, both must exit 0), between `bench:selftest` and
+  `pack`: the chain is now 8 blocking steps + 1 non-blocking (peer-preview).
+- `test/gate.mjs` pack check upgraded from a bare count to a named-set
+  assertion: the tarball names must equal exactly {SignalDecorators.js,
+  SignalDecorators.d.ts, llms.txt, CHANGELOG.md, README.md, LICENSE,
+  package.json}; `EXPECT_FILES` stays 7 and stays asserted, and a same-count
+  swap now fails.
+- `package.json` `scripts.cookbook` (`node cookbook/run.mjs`) and three pinned
+  devDependencies: `@zakkster/lite-store` 1.2.0, `@zakkster/lite-arena` 1.9.0,
+  `@zakkster/lite-await` 1.1.1. `files[]` and `version` are unchanged.
+
+### Lane summary
+
+Measured at closeout on the installed 1.5.0 peer: `npm test` 228 pass / 0 fail
+(was 214; `test/15-cookbook.test.mjs` adds 14 cases), green on both the plain and
+`--expose-gc` lanes. The gate chain is 8 blocking steps + 1 non-blocking
+(peer-preview), with the cookbook step between `bench:selftest` and `pack`. The
+cookbook lane: `cookbook lane: 12/12 companions ok in 1.8s`; the sabotage sweep
+`npm run cookbook -- --controls`: `cookbook lane: 6/6 controls fail correctly in
+4.6s`. `npm pack --dry-run` reports exactly 7 files, name set equal to
+{SignalDecorators.js, SignalDecorators.d.ts, llms.txt, CHANGELOG.md, README.md,
+LICENSE, package.json}. The surface is exactly 16 exports; the three version
+sites read 1.0.0; `SignalDecorators.js` and `SignalDecorators.d.ts` diff empty
+against the 1.0.0 tree.
+
 ## [1.0.0] - 2026-08-29
 
 The 1.0 release: docs freeze, the fleet playground, and the standing pre-publish

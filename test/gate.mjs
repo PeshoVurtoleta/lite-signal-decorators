@@ -11,9 +11,11 @@
 //   5. torture:controls    the TORTURE_BREAK sweep -- every scenario must FAIL when broken
 //   6. torture:peer-preview NON-BLOCKING -- forward peer lane, reported not gated
 //   7. bench selftest      the anti-DCE sink self-test (a cheating adapter must be caught)
-//   8. pack                npm pack --dry-run -- exactly 7 shipped files, no demo/ no Publications/
+//   8. cookbook            the COOKBOOK.md companion lane (all 12 under --expose-gc) AND
+//                          its COOKBOOK_BREAK control sweep -- both must exit 0
+//   9. pack                npm pack --dry-run -- exactly the 7-name shipped set, no demo/ no Publications/
 //
-// Exit 0 iff every BLOCKING step exited 0 and pack reports exactly 7 files.
+// Exit 0 iff every BLOCKING step exited 0 and pack reports exactly the 7-name set.
 // The peer-preview outcome is printed but never changes this script's exit code.
 //
 // ASCII-only. node:child_process/fs/path/url only.
@@ -25,6 +27,18 @@ import { dirname, join } from "node:path";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
 const EXPECT_FILES = 7;
+// The exact shipped tarball name set (CB-A6a). A count of 7 is necessary but not
+// sufficient: an unlisted name at count 7 (a swap) must still FAIL. EXPECT_FILES
+// stays 7 and stays asserted; this set hardens the check's shape, not its number.
+const EXPECT_NAMES = [
+    "SignalDecorators.js",
+    "SignalDecorators.d.ts",
+    "llms.txt",
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE",
+    "package.json",
+];
 
 function run(cmd, args, opts) {
     return spawnSync(cmd, args, { cwd: ROOT, encoding: "utf8", ...(opts || {}) });
@@ -76,7 +90,20 @@ r = run("npm", ["run", "--silent", "torture:peer-preview"]);
 r = run("npm", ["run", "--silent", "selftest"], { cwd: join(ROOT, "bench") });
 record("bench:selftest", r.status === 0, benchDetail(r));
 
-// --- step 8: npm pack --dry-run (exactly 7 files) -----------------------------
+// --- step 8: cookbook lane (BLOCKING) -----------------------------------------
+// Two child runs, both must exit 0: the corpus lane (all 12 companions under
+// `node --expose-gc` via the runner) AND the COOKBOOK_BREAK control sweep (each
+// gated recipe must FAIL when sabotaged -- a gate that cannot fail is not a
+// gate). The step is OK only when BOTH exit 0; its detail carries both summaries.
+{
+    const rMain = run("node", ["cookbook/run.mjs"]);
+    const rCtl = run("node", ["cookbook/run.mjs", "--controls"]);
+    const ok = rMain.status === 0 && rCtl.status === 0;
+    record("cookbook", ok, "exit " + rMain.status + "/" + rCtl.status +
+        " -- corpus " + cookbookTail(rMain) + "; controls " + cookbookTail(rCtl));
+}
+
+// --- step 9: npm pack --dry-run (exactly the 7-name set) ----------------------
 r = run("npm", ["pack", "--dry-run", "--json"]);
 {
     let count = -1;
@@ -88,15 +115,26 @@ r = run("npm", ["pack", "--dry-run", "--json"]);
         count = names.length;
     } catch (_) { /* count stays -1 -> FAIL */ }
     const stray = names.filter((n) => n.startsWith("demo/") || n.startsWith("Publications/"));
-    const ok = r.status === 0 && count === EXPECT_FILES && stray.length === 0;
-    record("pack", ok, "exit " + r.status + " -- " + count + "/" + EXPECT_FILES +
-        " files" + (stray.length ? " STRAY: " + stray.join(",") : ", no demo/ no Publications/"));
+    // NAMED-SET assertion (CB-A6a): the tarball names must equal EXPECT_NAMES
+    // exactly. Count is still asserted (== EXPECT_FILES) so a short or long set
+    // fails; the set membership catches a same-count SWAP that a bare count misses.
+    const nameSet = new Set(names);
+    const missing = EXPECT_NAMES.filter((n) => !nameSet.has(n));
+    const unlisted = names.filter((n) => !EXPECT_NAMES.includes(n));
+    const setOk = missing.length === 0 && unlisted.length === 0;
+    const ok = r.status === 0 && count === EXPECT_FILES && setOk && stray.length === 0;
+    let detail = "exit " + r.status + " -- " + count + "/" + EXPECT_FILES + " files";
+    if (stray.length) detail += " STRAY: " + stray.join(",");
+    else if (missing.length) detail += " MISSING: " + missing.join(",");
+    else if (unlisted.length) detail += " UNLISTED: " + unlisted.join(",");
+    else detail += ", exact 7-name set, no demo/ no Publications/";
+    record("pack", ok, detail);
 }
 
 // --- verdict ------------------------------------------------------------------
 process.stdout.write("\n" + "-".repeat(70) + "\n");
 process.stdout.write("  GATE " + (blockingFailed ? "FAIL" : "PASS") +
-    " -- 7 blocking steps + 1 non-blocking (peer-preview)\n");
+    " -- 8 blocking steps + 1 non-blocking (peer-preview)\n");
 process.exit(blockingFailed ? 1 : 0);
 
 // --- detail extractors --------------------------------------------------------
@@ -122,6 +160,12 @@ function tortureDetail(child) {
     const out = (child.stdout || "") + (child.stderr || "");
     const tail = lastMatch(out, /passed,.*failed in/);
     return "exit " + child.status + (tail ? " -- " + tail : "");
+}
+
+function cookbookTail(child) {
+    const out = (child.stdout || "") + (child.stderr || "");
+    const tail = lastMatch(out, /cookbook lane:/);
+    return tail ? tail.replace(/^cookbook lane:\s*/, "") : "exit " + child.status;
 }
 
 function benchDetail(child) {

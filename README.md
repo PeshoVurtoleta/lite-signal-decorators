@@ -376,7 +376,7 @@ The ~7 ns over raw batch is the guarded thunk + rest-array the decorator allocat
 
 The gates that hold it (run on every change, all green at 1.0.0):
 
-- `npm test` / `npm run test:gc` -- **214/214** on both lanes.
+- `npm test` / `npm run test:gc` -- **228/228** on both lanes.
 - Suite gate (lite-leak + lite-gc-profiler): `leak=size 0/0 findings=0 warnings=0 | gc major=0 minor=0 maxMs=0.00 | ok`.
 - Torture: **15 scenarios** (zero-GC read/write lanes at `maxMajor 0, maxPauseMs 4`; 4096-cycle leak gate at 0 live / 0 findings / 0 warnings; capacity atomicity at every overflow point; a 300-seed x 20k-op oracle with zero divergences) -- **13 run + 2 that skip correctly below their peer floors** (`scope-adoption` needs 1.6.0, `using-dispose` needs 1.9.0; the installed peer is 1.5.0). A skip *below* a floor is the forward-compat design working; a skip *at or above* it is a FAIL (run.mjs enforces floor-escalation). Every scenario carries a `TORTURE_BREAK` sabotage control that must exit non-zero -- **15/15 controls** prove each gate can actually fail.
 - `churn-soak` + `fleet-soak`: sustained construct/use/dispose and a 10s 2k-VM fleet tick; pools at floor and retained heap flat at every sample.
@@ -404,12 +404,12 @@ Full rationale lives in [`decisions/`](decisions/) -- each is a numbered, dated 
 ## Testing (for clients & QA)
 
 ```bash
-npm test            # node --test, 214 tests
-npm run test:gc     # the same 214 with --expose-gc (enables the allocation assertions)
-npm run gate        # the full pre-publish chain (section 10): fixtures -> test -> test:gc -> torture -> controls -> peer-preview (non-blocking) -> bench selftest -> pack
+npm test            # node --test, 228 tests
+npm run test:gc     # the same 228 with --expose-gc (enables the allocation assertions)
+npm run gate        # the full pre-publish chain (section 10): fixtures -> test -> test:gc -> torture -> controls -> peer-preview (non-blocking) -> bench selftest -> cookbook -> pack
 ```
 
-**214 tests** across fourteen files, all green at 1.0.0. The decorator protocol is tested three times over: against a mock Stage-3 emitter *and* against committed real TypeScript 5 and Babel `2023-11` emits, so both toolchains' codegen is pinned, not assumed.
+**228 tests** across fifteen files, all green at 1.0.0. The decorator protocol is tested three times over: against a mock Stage-3 emitter *and* against committed real TypeScript 5 and Babel `2023-11` emits, so both toolchains' codegen is pinned, not assumed.
 
 | File | Tests | Covers |
 |---|---:|---|
@@ -427,6 +427,7 @@ npm run gate        # the full pre-publish chain (section 10): fixtures -> test 
 | `12-accounting` | 11 | `costOf` node/link/shape grid (double-probe, frozen + cached, fail-closed) + `capacityFor` budget sizing |
 | `13-labels-audit` | 10 | `enableLabels`/`labelOf` per-registry identity + `auditReactive` leak reporting, both opt-in and default-OFF |
 | `14-qa-s4-boundary` | 21 | S4 adversarial edges: stats-less facade closure, signals-only capacity floor, label/audit boundary matrix |
+| `15-cookbook` | 14 | [`COOKBOOK.md`](https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md) drift/parity: each fenced block byte-compared against its tagged companion `#region` (both directions + both-way coverage), surface freeze (exactly 16 exports), citation allowlist, link law, static-cost probe |
 
 ### Emit-support matrix
 
@@ -459,6 +460,18 @@ npm run torture:controls    # sabotage self-test: every scenario must FAIL when 
 ```
 
 Fifteen scenarios: emit-matrix, ordering, lifecycle, pool-conservation, zero-GC lanes, capacity atomicity (every overflow point x both construction paths), the full disposed-poison surface + resurrection storms, a 4096-cycle lite-leak gate, a **300-seed x 20k-op oracle fuzzer** (decorated vs hand-wired raw twin in lockstep: every derived value, every effect fire count, every graph opcode tally), raw/decorated interop + cross-registry + `registry.destroy()` contracts, batch/untrack semantics, the wall-clock churn soak, and a 10s 2k-VM fleet soak -- plus two forward-compat scenarios (`scope-adoption`, `using-dispose`) that **skip correctly** while the installed peer sits below their per-feature floors (1.6.0 `createScope`, 1.9.0 `Symbol.dispose`). A skip below a floor is the design working; a skip at or above it is a FAIL. On the installed 1.5.0 peer: 13 pass, 2 skip. Every scenario carries a `TORTURE_BREAK` sabotage control that must exit non-zero -- a gate that cannot fail is not a gate. Seeded lanes replay exactly via `TORTURE_SEED`.
+
+### The cookbook lane (dev-side, never shipped)
+
+Every code block in [`COOKBOOK.md`](https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md) is byte-identical to a runnable companion in `cookbook/` (dev-only, never in `files[]`):
+
+```bash
+npm run cookbook            # run all 12 companions under node --expose-gc
+npm run cookbook -- --controls  # sabotage sweep: every gated recipe must FAIL when broken
+npm run cookbook -- --list      # the manifest: id, title, tier, gc verdict
+```
+
+Twelve recipe companions, six of them GC-gated (r1, r2, r4, r5, r9, r10) at the S1 budget (`gc.major === 0`, `maxPauseMs <= 4.0`, `<= 0.589` B/op with control-relative minors) and each carrying a `COOKBOOK_BREAK=<id>` sabotage control; the other six publish a non-empty reason in the manifest. Latest lane tails: `cookbook lane: 12/12 companions ok in 1.8s` and, under `--controls`, `cookbook lane: 6/6 controls fail correctly in 4.6s`. `test/15-cookbook.test.mjs` drift-checks the document against the companions in both directions (a one-byte edit either side fails, naming the recipe), and the gate runs the lane as a blocking step -- the chain is now 8 blocking steps + 1 non-blocking.
 
 ### The fleet demo (dev-side, never shipped)
 
@@ -541,6 +554,10 @@ The cross-framework numbers behind this table are stamped in [`decisions/0006-ki
 | `@zakkster/lite-devtools` | Graph inspection; `rootOf(vm)` + `forEachOwned` is the hook it walks. |
 | [`@zakkster/lite-watch-ex`](https://www.npmjs.com/package/@zakkster/lite-watch-ex) | One-shot / predicate-gated / pausable watchers over the same engine; thunk sources, default-registry effects -- see the [registry note](#composability) before pointing one at a decorated member. |
 | `@zakkster/lite-leak` + `@zakkster/lite-gc-profiler` | The dev-side harness that proves every retention and allocation claim in this README. Never shipped to consumers. |
+
+### The cookbook
+
+[`COOKBOOK.md`](https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md) collects twelve composition recipes over the frozen 16-export surface -- how to build the things this package deliberately does not ship a decorator for, by composing the ones it does. Its headline is the **MobX-parity-by-composition matrix**, mapping each remaining MobX construct (`observable.array`, `observable.map`, `observable.deep`, `toJS`, `when`, `runInAction`, `observe`/`intercept`) to a decorator, a suite member, or a recipe -- extending the migration tables above to the rest of MobX with the honest note per row. It walks the **two-plane fleet** (a sim plane of arena columns written raw per frame beside a reactive plane of a handful of committed members), the reactive-collection-without-a-node-per-element pattern, and the **lite-store boundary** where document state meets class state -- stated plainly as the one path that is *not* zero-GC, and why. Every code block is byte-verified against a runnable, GC-gated companion in `cookbook/` (`npm run cookbook`), so a quoted recipe cannot drift from working code. It is delivered GitHub-only -- the installed tarball stays the lean 7-file runtime surface (decisions/0009).
 
 ---
 

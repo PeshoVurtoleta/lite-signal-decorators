@@ -203,7 +203,12 @@ MAJOR, recorded in a decision file; new exports are minors; the hot accessor
 canon (`makeGet`/`makeSet`) does not move without a major. Also present since
 0.3.0: the dev-side class-reactivity benchmark (`bench/`, private, never
 shipped) and the fleet-soak torture scenario; the formal kill-criteria verdicts
-live in decisions/0006-kill-criteria.md. Still OUT of the 1.0 surface (each a
+live in decisions/0006-kill-criteria.md. Composition recipes over this frozen
+surface (the MobX-parity-by-composition matrix, the two-plane fleet, the
+lite-store boundary) live in COOKBOOK.md, delivered GitHub-only and NOT in the
+tarball -- read it at
+https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md
+(every code block byte-verified against a GC-gated companion; decisions/0009). Still OUT of the 1.0 surface (each a
 deliberate, documented exclusion, not an oversight): private (`#`) members,
 static members, module/global signals (raw lite-signal territory), and any
 instance reinitialization / pooling API -- an instance is single-lifetime,
