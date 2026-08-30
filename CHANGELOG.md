@@ -4,6 +4,57 @@ All notable changes to `@zakkster/lite-signal-decorators` are documented here.
 The format follows Keep a Changelog; this project adheres to Semantic
 Versioning.
 
+## [1.1.1] - 2026-08-30
+
+A docs-accuracy patch. No runtime, fixture, or emit-matrix byte changed; the
+accessor canon and every export are byte-identical to 1.1.0. The only test
+changes are `test/15`'s cookbook ground-truth recount for wave 2 and two
+comment-only lines in the gate's step description -- no budget moved anywhere.
+Surface stays at 18 exports; pack stays the same 7-file set.
+
+### Changed
+
+- Standards phrasing pass across README, llms.txt, package.json, the main-file
+  header, and the catalog card. TC39 lists the decorators proposal (and
+  Decorator Metadata) at Stage 2.7 since the 2026-05 plenary, down from Stage 3;
+  the emitters are unchanged -- TypeScript 5.x standard emit and Babel `2023-11`
+  remain the only real-world paths, no native engine ships decorators. Each doc
+  now names the fact once and refers to the protocol by its emitters everywhere
+  else, since stage labels drift and emitter names do not. Only the stage LABEL
+  moved: the emit matrix, the committed TS/Babel fixtures, and every test are
+  byte-untouched by this pass. Recorded in `research/feature-gap-2026-08-30.md` section 1 and
+  the `decisions/0011` addendum. Three-place version sync to 1.1.1
+  (`package.json`, the `VERSION` const, `llms.txt`).
+
+### Added
+
+- Cookbook wave 2: six recipes appended, `r12`..`r17`.
+  - `r12` -- Wait for a condition, as a Promise.
+  - `r13` -- React to a computed value, not every write (GATED).
+  - `r14` -- Tie teardown to an AbortSignal.
+  - `r15` -- Async state without async in the graph.
+  - `r16` -- Read without subscribing.
+  - `r17` -- Start the resource when someone is watching (GATED).
+- Cookbook gated set grows 6 -> 8 (adds `r13`, `r17`).
+- Publications refresh (P3): the outward drafts restamped to the 1.1.x story;
+  files stay git-untracked.
+
+### Gate output (section-10 chain, archived verbatim)
+
+```
+  fixtures              OK       exit 0 -- emit fixtures regenerated
+  test                  OK       exit 0 -- 257 pass / 0 fail
+  test:gc               OK       exit 0 -- 257 pass / 0 fail
+  torture               OK       exit 0 -- 14 passed, 2 skipped, 0 warned, 0 failed in 33.1s
+  torture:controls      OK       exit 0 -- 16 passed, 0 skipped, 0 warned, 0 failed in 2.0s
+  torture:peer-preview  REPORTED NON-BLOCKING -- lane completed (exit 0) [preview   1.9.0-preview.6     SUITE-GREEN     16 passed, 0 skipped, 0 warned, 0 failed; canary    1.9.0-canary.1      SUITE-GREEN     16 passed, 0 skipped, 0 warned, 0 failed]
+  bench:selftest        OK       exit 0 -- ALL PASS -- 22 passed, 0 failed
+  cookbook              OK       exit 0/0 -- corpus 18/18 companions ok in 2.1s; controls 8/8 controls fail correctly in 5.0s
+  pack                  OK       exit 0 -- 7/7 files, exact 7-name set, no demo/ no Publications/
+----------------------------------------------------------------------
+  GATE PASS -- 8 blocking steps + 1 non-blocking (peer-preview)
+```
+
 ## [1.1.0] - 2026-08-30
 
 The pooled-lifetime release: an instance is no longer single-lifetime. The

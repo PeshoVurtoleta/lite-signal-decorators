@@ -1,7 +1,7 @@
 {
   "name": "@zakkster/lite-signal-decorators",
-  "version": "1.1.0",
-  "description": "Stage-3 decorator layer over @zakkster/lite-signal. The reactive class layer where an instance has a measured cost, deterministic teardown, and a churn benchmark.",
+  "version": "1.1.1",
+  "description": "Standard-decorators layer over @zakkster/lite-signal (TC39 decorators proposal, Stage 2.7 since 2026-05; TS 5.x / Babel 2023-11 emit unchanged). The reactive class layer where an instance has a measured cost, deterministic teardown, and a churn benchmark.",
   "author": "Zahary Shinikchiev <shinikchiev@yahoo.com>",
   "license": "MIT",
   "type": "module",
@@ -39,7 +39,7 @@
     "reactive",
     "reactivity",
     "decorators",
-    "stage-3",
+    "standard-decorators",
     "computed",
     "derived",
     "class",

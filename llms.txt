@@ -1,8 +1,10 @@
 # @zakkster/lite-signal-decorators
 
-VERSION 1.1.0
+VERSION 1.1.1
 
-> Stage-3 decorator layer over @zakkster/lite-signal. Turns a plain class into a
+> Standard-decorators layer over @zakkster/lite-signal, built on the TC39
+> decorators proposal (Stage 2.7 since 2026-05; TS 5.x / Babel 2023-11 emit
+> unchanged). Turns a plain class into a
 > reactive view-model where each instance has a measured per-property cost, a
 > single deterministic teardown, and poison-on-dispose safety. ESM-only, zero
 > runtime dependencies beyond the peer. The accessor read/write bodies carry one
@@ -80,7 +82,7 @@ slot for a poison handle, so any later read/write throws a named
   `FinalizationRegistry` reports any instance GC'd without `disposeReactive`.
 - `ReactiveDisposedError` -- `extends Error`, `name` `"ReactiveDisposedError"`,
   fields `className` and `key`.
-- `VERSION` -- `"1.1.0"`.
+- `VERSION` -- `"1.1.1"`.
 
 ## Registry law (one registry per host chain)
 
@@ -123,7 +125,8 @@ no node leaks, on the decorator path (init-phase) and the buildless path alike.
 
 ## Buildless contract (defineReactive)
 
-`defineReactive(Class, spec)` is for consumers without a Stage-3 transpiler. The
+`defineReactive(Class, spec)` is for consumers without a standard-decorators
+(2023-11) transpiler. The
 spec normalizes (fail closed; `Reflect.ownKeys`, so symbol keys work):
 
 - `signals`: an array of keys (each initial `undefined`) OR a map

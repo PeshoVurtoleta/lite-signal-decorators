@@ -11,7 +11,7 @@
 //   5. torture:controls    the TORTURE_BREAK sweep -- every scenario must FAIL when broken
 //   6. torture:peer-preview NON-BLOCKING -- forward peer lane, reported not gated
 //   7. bench selftest      the anti-DCE sink self-test (a cheating adapter must be caught)
-//   8. cookbook            the COOKBOOK.md companion lane (all 12 under --expose-gc) AND
+//   8. cookbook            the COOKBOOK.md companion lane (every manifest companion under --expose-gc) AND
 //                          its COOKBOOK_BREAK control sweep -- both must exit 0
 //   9. pack                npm pack --dry-run -- exactly the 7-name shipped set, no demo/ no Publications/
 //
@@ -91,7 +91,7 @@ r = run("npm", ["run", "--silent", "selftest"], { cwd: join(ROOT, "bench") });
 record("bench:selftest", r.status === 0, benchDetail(r));
 
 // --- step 8: cookbook lane (BLOCKING) -----------------------------------------
-// Two child runs, both must exit 0: the corpus lane (all 12 companions under
+// Two child runs, both must exit 0: the corpus lane (every manifest companion under
 // `node --expose-gc` via the runner) AND the COOKBOOK_BREAK control sweep (each
 // gated recipe must FAIL when sabotaged -- a gate that cannot fail is not a
 // gate). The step is OK only when BOTH exit 0; its detail carries both summaries.

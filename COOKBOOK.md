@@ -52,6 +52,12 @@ The runnable code is not decorative. Every fenced block tagged `<!-- COOKBOOK:rN
 9. [Pro: the two-plane fleet](#recipe-9----pro-the-two-plane-fleet)
 10. [Pro: registry isolation, and what refuses to cross](#recipe-10----pro-registry-isolation-and-what-refuses-to-cross)
 11. [Pro: a MobX store, migrated](#recipe-11----pro-a-mobx-store-migrated)
+12. [Wait for a condition, as a Promise](#recipe-12----wait-for-a-condition-as-a-promise)
+13. [React to a computed value, not every write](#recipe-13----react-to-a-computed-value-not-every-write)
+14. [Tie teardown to an AbortSignal](#recipe-14----tie-teardown-to-an-abortsignal)
+15. [Async state without async in the graph](#recipe-15----async-state-without-async-in-the-graph)
+16. [Read without subscribing](#recipe-16----read-without-subscribing)
+17. [Pro: start the resource when someone is watching](#recipe-17----pro-start-the-resource-when-someone-is-watching)
 
 **Appendix**
 
@@ -97,14 +103,15 @@ This is the headline. The README's migration tables cover the one-to-one decorat
 | `observable` (primitive) | `@reactive accessor` | -- | r0 | 1 node, fixed at decoration time |
 | `computed` | `@derived get` | -- | r0 | lazy; links form at first read, not at decoration |
 | `action` | `@batched` | `registry.batch(...)` | r5 | allocates a thunk + rest-array per call, by design -- action-grade, not per-frame |
-| `autorun` / `reaction` | `@reactiveEffect` | `@zakkster/lite-watch-ex` | r2 | watchers bind the default registry ONLY; a custom-registry instance never fires one (PD-29) |
+| `autorun` / `reaction` | `@reactiveEffect` | `@zakkster/lite-watch-ex` | r2, r13 | watchers bind the default registry ONLY; a custom-registry instance never fires one (PD-29); a reaction reads a `@derived` selector so it fires on the computed value, not every write (r13) |
 | `makeObservable(this, {...})` | `@reactiveHost` / `defineReactive` | -- | r0 | one wiring site in the most-derived constructor; no mirror object to keep in sync |
 | `observable.array` | `rev` + `length` signal | `@zakkster/lite-signal-dom` `keyed()` | r4 | NEVER a node per element; the list stays a plain array |
 | `observable.map` | `rev` + `size` signal over a plain `Map` | `@zakkster/lite-store` | r4 | lite-store is opaque on `Map` (card: NOT FOR); stamp a plain `Map` instead |
 | `observable.deep` | rev-stamped boundary | `@zakkster/lite-store` `store()` | r5, r6 | the lite-store path is **NOT zero-GC** -- lazy per-key signals + a deep-copying `snapshot()` |
 | `observable.ref` / `.shallow` | `@reactive` (default `Object.is`) | -- | r0 | already the default; a `@reactive` member compares by identity unless you pass `equals` |
 | `toJS` | flat snapshot walk | `@zakkster/lite-store` `snapshot()` | r7 | both allocate; both are cold, opt-in, off any frame path |
-| `when` (promise form) | -- | `@zakkster/lite-await` `whenSignal` | r8 | a Promise per call -- a lifecycle boundary only, never inside a loop |
+| `when` (promise form) | -- | `@zakkster/lite-await` `whenSignal` | r8, r12 | a Promise per call -- a lifecycle boundary only, never inside a loop; r12 shows the manual deferred + the timeout/AbortSignal variants |
+| `onBecomeObserved` / `onBecomeUnobserved` | -- | `@zakkster/lite-signal` `observeObservers` | r17 | transition-only (0->1 / 1->0); a REAL tracked read drives it, construction alone does not; top-level is default-registry-only (PD-29) |
 | `observe` / `intercept` | -- | -- | r7 | not offered; `rootOf(vm)` + `registry.forEachOwned` is the audit path, and it is opt-in |
 | `runInAction` | `@batched` | `registry.batch` | r5 | same note as `action` -- one call per user intent |
 | disposal | `disposeReactive(vm)` | -- | r1 | **MobX has no equivalent.** Its per-instance graph ends when the collector decides; here it is one idempotent, node-exact call |
@@ -176,7 +183,7 @@ class Vitals {
 // costOf(Vitals) is the SAME { nodes: 4, links: 1 } as the defineReactive twin above.
 ```
 
-*Non-runnable: the decorator tier (this package's own Start-here surface) needs a Stage-3 decorator transpiler, which this corpus does not run. The `defineReactive` block above is its executable equivalent.*
+*Non-runnable: the decorator tier (this package's own Start-here surface) needs a standard-decorators transpiler (TypeScript 5 / Babel 2023-11), which this corpus does not run. The `defineReactive` block above is its executable equivalent.*
 
 The result is a fact, not a snapshot -- frozen and cached by class identity, so sizing a class you never construct costs you one probe and nothing after:
 
@@ -1549,6 +1556,491 @@ you to lite-store `store()` -- and r6's published, non-zero-GC boundary.
   to lite-store, and you accept r6's cost for it alone. Do not migrate the whole
   store to a document model to accommodate one growing field; migrate the field.
 
+## Recipe 12 -- Wait for a condition, as a Promise
+
+**Goal.** Turn "wait until this member satisfies a predicate" into a Promise you
+can await -- with a timeout and an AbortSignal -- without pretending async is
+synchronous inside the reactive graph.
+
+**The forces.** The temptation is a synchronous-looking `whenAsync` in the update
+path; PD-30 refuses it, because it allocates a Promise per call where the code
+pretends to be hot. The honest shape allocates one Promise at a lifecycle
+boundary and never inside a frame loop, and it comes in two forms. The manual
+mechanism is a `withResolvers` deferred plus one self-disposing effect that reads
+a `@derived` predicate and resolves the first time it holds. The packaged form is
+lite-await's `whenSignal`. A wrinkle the probe pinned (2026-08-30):
+`whenTruthy(boxOf(vm, key))` does NOT compose -- lite-signal 1.5.0's `SignalBox`
+is a non-callable object and `whenSignal` requires a callable source, so it
+rejects `TypeError` "source must be a function". You pass a thunk that reads the
+member instead. Both forms clean their own effect on settle; a wait that never
+comes true keeps its effect until a `timeout` or an `AbortSignal` tears it down.
+
+**Code.**
+
+The manual form first: a deferred plus one self-disposing effect that reads the
+derived predicate and resolves on the first hit.
+
+<!-- COOKBOOK:r12.1 -->
+```js
+import { withResolvers } from "@zakkster/lite-await";
+import { effect } from "@zakkster/lite-signal";
+import { defineReactive } from "@zakkster/lite-signal-decorators";
+
+// A "when" as a Promise, under the hood. The predicate is a @derived member; one
+// effect reads it and resolves a withResolvers deferred the first time it holds,
+// then disposes ITSELF -- a resolved wait leaks nothing. withResolvers() is one
+// Promise per call, allocated at the boundary, never inside a frame loop.
+const Connection = defineReactive(class Connection {}, {
+    signals: { status: "idle" },
+    deriveds: { isLive: (vm) => vm.status === "live" },   // the predicate, as a derived
+    effects: {},
+});
+
+function whenMember(vm, read, predicate) {
+    const { promise, resolve } = withResolvers();
+    let settled = false;
+    let stop = null;
+    stop = effect(() => {
+        const value = read(vm);                 // reads the derived -> tracks it
+        if (settled) return;
+        if (predicate(value)) {
+            settled = true;
+            resolve(value);
+            if (stop) stop();                   // self-dispose on first hit
+        }
+    });
+    return promise;
+}
+```
+
+The packaged form reads through a thunk, and every awaiter option composes onto
+it -- `{ timeout }` and `{ signal }` alike.
+
+<!-- COOKBOOK:r12.2 -->
+```js
+import { whenSignal, TimeoutError } from "@zakkster/lite-await";
+
+// The packaged form: lite-await's whenSignal reads through a THUNK, never the box
+// handle -- a SignalBox (1.5.0) is a non-callable object, so whenTruthy(boxOf(
+// vm, key)) throws "source must be a function". Wrap the read in `() => ...` and
+// every awaiter option composes: { timeout } rejects TimeoutError if the wait
+// never settles; { signal } lets an AbortController tear it down early. whenSignal
+// cleans its own effect on every settlement path.
+async function untilLive(conn, opts) {
+    await whenSignal(() => conn.isLive, (v) => v === true, opts);
+    return conn.status;
+}
+```
+
+**What it costs.** Not gated. Each wait is one Promise allocated at the boundary
+-- lite-await's own documented behavior, one call per condition, never per frame.
+`whenAsync` stays refused for the same reason r8 refuses it: a Promise per call in
+a hot-looking place is exactly the shape PD-30 keeps out.
+
+**Gotchas.**
+
+- Pass a THUNK, not the box handle. `whenTruthy(boxOf(vm, key))` rejects
+  `TypeError` "source must be a function" -- a `SignalBox` is not callable. Wrap
+  the read: `() => vm.member` (or `() => boxOf(vm, key).get()`).
+- Always give an unbounded wait an exit. A wait that never settles keeps its
+  effect alive; pass `{ timeout }` or `{ signal }` so it can never dangle. The
+  timeout rejects `TimeoutError`; the abort rejects `AbortError`; both clean the
+  effect.
+- The deferred is one Promise per call, by design. This is a lifecycle boundary,
+  never a frame path -- do not build a "when" inside a render loop.
+
+## Recipe 13 -- React to a computed value, not every write
+
+**Goal.** Fire an effect when a DERIVED value changes, not on every raw write
+underneath it -- MobX's `reaction(dataFn, effectFn)`, expressed as an effect that
+reads only a selector.
+
+**The forces.** An effect that reads raw members re-runs on every write. The fix
+is to read a `@derived` selector and let its `Object.is` guard swallow the writes
+that do not move it: here the selector buckets a raw counter into 16-wide bands,
+so fifteen of every sixteen writes leave the band unchanged and the reaction
+stays silent. `fireImmediately` and `delay` are not extra API -- they fall out of
+the effect's `{scheduler}`: the auto-effect's first run IS fire-immediately, and a
+scheduler that defers the engine's flush thunk (a microtask, a timer, a frame
+clock) coalesces a write storm into one trailing run. The two-effect
+signalify/sync guard folds into the gotchas below.
+
+**Code.**
+
+The reaction shape: the effect body reads only the selector, so a raw write that
+does not move the band does not re-fire it.
+
+<!-- COOKBOOK:r13.1 -->
+```js
+import { defineReactive, disposeReactive } from "@zakkster/lite-signal-decorators";
+
+// MobX reaction(dataFn, effectFn): the effect body reads ONLY a derived SELECTOR,
+// so it fires when the SELECTOR value changes -- not on every raw write. Here the
+// selector buckets a raw counter into 16-wide bands; fifteen of every sixteen
+// writes leave the band unchanged and the reaction stays SILENT. That is the
+// whole point: you react to a computed value, not to every mutation underneath it.
+const Meter = defineReactive(class Meter {}, {
+    signals: { raw: 0 },
+    deriveds: { band: (vm) => vm.raw >> 4 },              // the selector: derived, memoised
+    effects: {
+        onBand: (vm) => { void vm.band; reactions++; },   // reads the selector, nothing raw
+    },
+});
+const meter = new Meter();      // fireImmediately: the auto-effect runs once at wiring
+```
+
+`fireImmediately` and `delay` through the `{scheduler}`: defer the flush to
+coalesce a burst into one delayed run.
+
+<!-- COOKBOOK:r13.2 -->
+```js
+// fireImmediately and delay are expressed through the effect's {scheduler}. The
+// scheduler receives the engine's flush thunk: call it now for a synchronous
+// run, or defer it (queueMicrotask / setTimeout / a frame clock) to coalesce a
+// burst into one trailing reaction. Here a microtask scheduler batches a write
+// storm into a single delayed run instead of one run per write.
+let scheduled = 0;
+const Debounced = defineReactive(class Debounced {}, {
+    signals: { raw: 0 },
+    deriveds: { band: (vm) => vm.raw >> 4 },
+    effects: {
+        onBand: {
+            run: (vm) => { void vm.band; },
+            scheduler: (flush) => { scheduled++; queueMicrotask(flush); },
+        },
+    },
+});
+const debounced = new Debounced();
+debounced.raw = 100;            // one selector change -> one scheduled (deferred) run
+```
+
+**What it costs.** Gated. The measured steady-state loop -- raw writes propagating
+through the selector to the effect -- holds `gc.major === 0`, `maxPauseMs <= 4.0`,
+at or under the 0.589 B/op noise floor, and minors gated control-relative against
+an in-process zero-alloc control plus 128. `COOKBOOK_BREAK=r13` allocates one
+object per op in the measured loop and the minor gate catches it.
+
+**Gotchas.**
+
+- Read the SELECTOR in the effect body, not the raw members. Read the raw members
+  and you are back to a run per write -- the exact cost you migrated away from.
+- `fireImmediately` IS the auto-effect's first run; `delay` is a scheduler that
+  defers the flush. Do not reach for a separate API -- `{scheduler}` expresses both.
+- The signalify/sync two-effect pattern is a trap in one line: if you mirror a
+  POJO into signals with one effect and write changes back with another, guard the
+  write-back against the value you just read or the two effects ping-pong. A single
+  `@derived` selector needs no such guard -- prefer it.
+
+## Recipe 14 -- Tie teardown to an AbortSignal
+
+**Goal.** Bind a VM's single teardown to an external lifetime -- an
+`AbortController`, or a block scope -- so disposal happens exactly once, at
+exactly the right edge.
+
+**The forces.** This is a teardown boundary, not a frame path. One
+`addEventListener("abort", ..., { once: true })` bridges any `AbortController`
+ecosystem to `disposeReactive`; `{ once: true }` drops the listener after it fires,
+so the bridge itself leaves nothing behind. For a block-scoped lifetime,
+`disposeReactive` is wired to `Symbol.dispose`, so a `using` binding tears the
+instance down at block exit -- the same idempotent teardown, no explicit call.
+Double-dispose is idempotent: a second teardown is a no-op that returns `false`,
+so the abort bridge and an explicit call can never double-free.
+
+**Code.**
+
+The abort bridge: one listener, fired once, disposes the instance when the scope
+aborts.
+
+<!-- COOKBOOK:r14.1 -->
+```js
+import { defineReactive, disposeReactive, ReactiveDisposedError } from "@zakkster/lite-signal-decorators";
+
+// Bridge any AbortController-based lifecycle to a VM's single teardown: one
+// listener, fired once, disposes the instance when the scope aborts. { once: true }
+// drops the listener after it fires, so the bridge itself leaves nothing behind --
+// the AbortController owns the "when", disposeReactive owns the "what".
+const Session = defineReactive(class Session {}, {
+    signals: { token: null, active: true },
+    deriveds: {},
+    effects: {},
+});
+
+function bindToScope(vm, signal) {
+    signal.addEventListener("abort", () => disposeReactive(vm), { once: true });
+    return vm;
+}
+```
+
+Or let a block own it, through `Symbol.dispose`.
+
+<!-- COOKBOOK:r14.2 -->
+```js
+// Or let a block scope own it. disposeReactive is also wired to Symbol.dispose,
+// so a `using` binding tears the instance down at the end of the block -- the same
+// idempotent teardown, no explicit call and no AbortController. Reach for the
+// AbortSignal form when the lifetime is an external scope; reach for `using` when
+// it is exactly a block.
+function inScope() {
+    using session = new Session();   // disposed at block exit via Symbol.dispose
+    session.token = "abc";
+    return session.token;            // teardown fires after the return value is read
+}
+```
+
+**What it costs.** Not gated. Binding teardown to a scope is a lifecycle concern,
+run once per instance, off any hot loop; `disposeReactive` is allocation-free on
+its success path.
+
+**Gotchas.**
+
+- `{ once: true }` is not optional. Without it the listener outlives the abort and
+  pins its closure -- a leak inside the teardown you wrote to prevent one.
+- `disposeReactive` is idempotent. The abort bridge firing and an explicit call
+  cannot double-free: the second call returns `false` and changes nothing.
+- `using` needs a runtime with `Symbol.dispose` support; the `AbortSignal` form
+  works anywhere. Reach for `using` when the lifetime is exactly a block, the
+  signal when it is an external scope.
+
+## Recipe 15 -- Async state without async in the graph
+
+**Goal.** Model an async result -- state, value, error -- as three plain reactive
+members written by a plain promise handler, so nothing async ever lives in the
+reactive graph.
+
+**The forces.** Async is where reactive systems rot quietly: a fetch resolves
+after teardown and writes to an object nobody owns. Keep async at the settlement
+boundary -- the graph sees only synchronous signal writes -- and let the
+poison-on-dispose contract make a late settlement loud instead of silent. A plain
+`promise.then` handler writes the members from OUTSIDE the graph; a `@derived`
+reads them like any other synchronous state. lite-await's `fromPromise` packages
+this exact three-state shape as one signal when you want the packaged form.
+
+**Code.**
+
+Three plain members plus a plain handler; the graph only ever sees synchronous
+writes.
+
+<!-- COOKBOOK:r15.1 -->
+```js
+import { defineReactive, disposeReactive, ReactiveDisposedError } from "@zakkster/lite-signal-decorators";
+
+// Three plain reactive members model an async result -- state, value, error --
+// and NOTHING async lives in the reactive graph. A plain promise handler writes
+// the members at the settlement boundary; the graph only ever sees synchronous
+// signal writes, so every reader (a derived, an effect, a watcher) stays in the
+// zero-GC world. lite-await's fromPromise packages this exact three-state shape
+// as one signal when you want the packaged form.
+const Query = defineReactive(class Query {}, {
+    signals: { state: "idle", value: null, error: null },
+    deriveds: { settled: (vm) => vm.state === "done" || vm.state === "failed" },
+    effects: {},
+});
+
+function run(vm, promise) {
+    vm.state = "pending";
+    promise.then(
+        (v) => { vm.value = v; vm.state = "done"; },      // plain handler, synchronous writes
+        (e) => { vm.error = e; vm.state = "failed"; },
+    );
+    return vm;
+}
+```
+
+The settlement boundary is where a late promise meets a dead instance. After
+dispose it throws -- the wanted outcome, r8's law at the pattern level.
+
+<!-- COOKBOOK:r15.2 -->
+```js
+// The settlement boundary is where a late promise meets a dead instance. After
+// disposeReactive, every member slot is poisoned, so a settlement that lands
+// after teardown THROWS ReactiveDisposedError naming Class.key -- the WANTED
+// outcome: a stale async write is loud, never a phantom mutation on an object
+// nobody owns anymore. A real handler lets that throw propagate to a rejection
+// sink; the graph is never silently corrupted.
+function settleInto(vm, value) {
+    try {
+        vm.value = value;
+        vm.state = "done";
+        return { landed: true, error: null };
+    } catch (e) {
+        if (e instanceof ReactiveDisposedError) return { landed: false, error: e.className + "." + e.key };
+        throw e;
+    }
+}
+```
+
+**What it costs.** Not gated. The promise handler and the Promise allocate at the
+boundary by design; the reactive graph stays in the zero-GC world because it only
+ever sees synchronous signal writes.
+
+**Gotchas.**
+
+- The poison throw is the feature. A settlement after dispose throws
+  `ReactiveDisposedError` naming `Class.key`; let it reach a rejection sink, do not
+  `catch {}` it into silence. A silent late write is the bug this shape exists to
+  make loud.
+- Nothing async goes INTO a `@derived` or `@reactiveEffect`. Derived getters must
+  be pure; the promise handler writes members from outside the graph, and the
+  graph stays synchronous.
+- `fromPromise` is the packaged form when you want one signal instead of three
+  members -- but its signal is default-registry (the r6/r8 wall). Read it and PUSH
+  into an isolated VM; do not expect a bound-registry effect to track it.
+
+## Recipe 16 -- Read without subscribing
+
+**Goal.** Read a member's current value without creating a dependency on it -- one
+member via `peek()`, a whole block via the engine's `untrack`.
+
+**The forces.** Sometimes you need the value but not the subscription: a one-off
+read inside an effect that must not re-run when that member changes.
+`boxOf(vm, key).peek()` answers with the live value and adds no dependency, even
+inside a tracking scope, on every box shape -- a `@reactive` member is a
+`SignalBox`, a `@derived` member is a `ComputedBox`, and both answer `peek()`. For
+a whole block, the engine's `untrack` does the same -- imported from
+`@zakkster/lite-signal`, deliberately NOT re-exported here, so the read/write
+surface stays at 18 and the primitive is named where it actually lives.
+
+**Code.**
+
+`peek()` reads one member without subscribing, on either box shape.
+
+<!-- COOKBOOK:r16.1 -->
+```js
+import { defineReactive, boxOf, disposeReactive } from "@zakkster/lite-signal-decorators";
+
+// Read a member WITHOUT subscribing to it. boxOf(vm, key).peek() returns the live
+// value and adds no dependency, even inside a tracking scope -- the escape hatch
+// for a read you do not want to react to. peek() is on every box shape: a
+// @reactive member is a SignalBox, a @derived member is a ComputedBox, and both
+// answer peek().
+const Cursor = defineReactive(class Cursor {}, {
+    signals: { x: 0, y: 0 },
+    deriveds: { dist: (vm) => Math.abs(vm.x) + Math.abs(vm.y) },
+    effects: {},
+});
+const cursor = new Cursor();
+cursor.x = 3;
+cursor.y = 4;
+const xNow = boxOf(cursor, "x").peek();          // 3 -- a SignalBox peek, untracked
+const distNow = boxOf(cursor, "dist").peek();    // 7 -- a ComputedBox peek, untracked
+```
+
+`untrack` does the same for a whole block -- from the engine, not this package.
+
+<!-- COOKBOOK:r16.2 -->
+```js
+// For a whole block of untracked reads, use the ENGINE's untrack -- imported from
+// @zakkster/lite-signal, NOT from this package. The decorators layer deliberately
+// does not re-export untrack: keeping it at the engine names where the primitive
+// actually lives and holds the read/write surface at 18 exports. Reads inside the
+// callback add no dependencies, so a snapshot taken this way never subscribes.
+import { untrack } from "@zakkster/lite-signal";
+
+function snapshotUntracked(vm) {
+    return untrack(() => ({ x: vm.x, y: vm.y, dist: vm.dist }));
+}
+```
+
+**What it costs.** Not gated. This is a cold single-read demonstration; the
+package's own zerogc torture lanes own the read budgets. `peek()` and `untrack`
+add no dependency and no allocation on the read itself.
+
+**Gotchas.**
+
+- `peek()` is per-box; `untrack` is per-block. Use `peek()` for a single value,
+  `untrack` when several reads in a scope must all stay unsubscribed.
+- `untrack` comes from `@zakkster/lite-signal`, not this package. The decorators
+  layer does not re-export it -- reach for the engine directly; the 18-export
+  surface is deliberate, not an omission.
+- A `peek()` inside an effect does NOT re-run the effect when the member changes; a
+  tracked read does. That difference is the whole point -- and a subtle bug if you
+  `peek()` where you meant to track.
+
+## Recipe 17 -- Pro: start the resource when someone is watching
+
+**Goal.** Start an expensive resource -- a ticker, a socket, a subscription -- on
+the FIRST observer of a member and stop it on the LAST, with nothing running while
+nobody watches.
+
+**The forces.** This is MobX's `onBecomeObserved` / `onBecomeUnobserved`, and the
+installed peer ships it: `observeObservers(boxOf(vm, key), hooks)` fires
+`onConnect` on the 0->1 observer transition and `onDisconnect` on 1->0. It is
+transition-only -- a second concurrent observer never restarts a running resource,
+and dropping one of two never stops it. The pinned trap: transitions are driven by
+a REAL tracked read, never by construction. Building the VM and calling
+`observeObservers` fire nothing; the resource starts only when an effect actually
+READS the member, and stops when that effect disposes. And the top-level
+`observeObservers` binds the default registry (the r10 PD-29 wall), so a box
+isolated on a custom world is invisible to it.
+
+**Code.**
+
+The lazy-resource shape: hooks on the box, firing on the transitions only.
+
+<!-- COOKBOOK:r17.1 -->
+```js
+import { observeObservers, effect } from "@zakkster/lite-signal";
+import { defineReactive, boxOf, disposeReactive } from "@zakkster/lite-signal-decorators";
+
+// Start a resource when the FIRST observer appears and stop it when the LAST one
+// leaves -- MobX's onBecomeObserved / onBecomeUnobserved, over the installed
+// peer's observeObservers. boxOf(vm, key) is the handle the hooks attach to; they
+// fire on the 0->1 and 1->0 transitions ONLY, so a second concurrent observer
+// never restarts a resource that is already running.
+const Feed = defineReactive(class Feed {}, {
+    signals: { tick: 0 },
+    deriveds: {},
+    effects: {},
+});
+const feed = new Feed();
+const tickBox = boxOf(feed, "tick");             // the handle observers attach to
+const unobserve = observeObservers(tickBox, {
+    onConnect: () => { running = true; starts++; },      // first watcher -> start the resource
+    onDisconnect: () => { running = false; stops++; },   // last watcher gone -> stop it
+});
+```
+
+The pinned gotcha: a hoisted body, a real tracked read, and the transition it
+drives -- construction alone drives nothing.
+
+<!-- COOKBOOK:r17.2 -->
+```js
+// The pinned gotcha: a transition is driven by a REAL tracked read, never by
+// construction alone. Building the VM and calling observeObservers fire nothing;
+// the resource starts only when an effect actually READS the member, and stops
+// when that effect disposes. A hoisted body keeps the toggle allocation-free --
+// a fresh closure per cycle would allocate against the pool that reuses nodes.
+const readTick = () => { void tickBox.get(); };  // a real tracked read of the member
+function watchOnce() {
+    const stop = effect(readTick);   // 0->1: onConnect fires, the resource starts
+    stop();                          // 1->0: onDisconnect fires, the resource stops
+}
+```
+
+**What it costs.** Gated, on two proofs. Retention: 4096 observe/unobserve
+transitions retain nothing -- `tracker.size()` is 0, the default ledger's
+`activeNodes` returns to the exact baseline, `poolGrowths` delta is 0, and the
+start/stop counts are exactly paired (4096 == 4096). Steady state: the measured
+toggle loop holds `gc.major === 0`, `maxPauseMs <= 4.0`, control-relative minors,
+and a per-op cost at or under the 0.589 B/op floor -- in practice the bracket
+inverts, so there is no positive per-op cost to attribute at all.
+`COOKBOOK_BREAK=r17` allocates one object per op in the toggle loop and the minor
+gate catches it.
+
+**Gotchas.**
+
+- A transition needs a tracked read. `observeObservers` on a freshly constructed
+  VM fires nothing; only an effect that READS the member drives 0->1. The companion
+  asserts this -- do not assume it from a comment.
+- Transition-only. A second concurrent observer does not re-fire `onConnect`, and
+  dropping one of two does not fire `onDisconnect`. Start and stop your resource on
+  the edges, not on every subscribe.
+- Hoist the effect body. A fresh closure per toggle allocates against the pool that
+  reuses nodes; a hoisted body keeps the observe/unobserve loop zero-GC.
+- Top-level `observeObservers` is default-registry-only (r10's wall). A box
+  isolated on a custom registry is invisible to it -- observe the class side on the
+  default world, or the transition never fires.
+
 ## Appendix -- running the companions
 
 Every code block in the recipes above is copied byte-for-byte out of a runnable
@@ -1566,14 +2058,15 @@ npm run cookbook -- --controls  # run the COOKBOOK_BREAK sabotage sweep (see bel
 ```
 
 `--list` reads `cookbook/manifest.json` and prints each recipe's id, title, tier,
-and gate status. The six gated recipes (r1, r2, r4, r5, r9, r10) run under the S1
-budget: `gc.major === 0`, `maxPauseMs <= 4.0`, bytes-per-op at or under the
-stamped noise floor, and minors gated CONTROL-RELATIVE against an in-process
-zero-alloc control plus 128 -- never a hardcoded zero. The six ungated recipes
-(r0, r3, r6, r7, r8, r11) each carry a non-empty `reason` in the manifest, and an
-empty reason is a runner FAILURE, not a shrug: honesty is enforced, not
-requested. Those reasons are the same ones the recipes state in their own words
--- r6 and r8's allocations are named where they happen.
+and gate status. The eight gated recipes (r1, r2, r4, r5, r9, r10, r13, r17) run
+under the S1 budget: `gc.major === 0`, `maxPauseMs <= 4.0`, bytes-per-op at or
+under the stamped noise floor, and minors gated CONTROL-RELATIVE against an
+in-process zero-alloc control plus 128 -- never a hardcoded zero. The ten ungated
+recipes (r0, r3, r6, r7, r8, r11, r12, r14, r15, r16) each carry a non-empty
+`reason` in the manifest, and an empty reason is a runner FAILURE, not a shrug:
+honesty is enforced, not requested. Those reasons are the same ones the recipes
+state in their own words -- r6, r8, r12, and r15's allocations are named where
+they happen.
 
 `COOKBOOK_BREAK=<id>` is the proof that a gated recipe's gate can actually fail.
 Set it, and that recipe's harness allocates one object per op inside the measured
@@ -1584,8 +2077,8 @@ the minor gate must catch it and the recipe must exit non-zero:
 COOKBOOK_BREAK=r9 npm run cookbook    # r9 must FAIL; a gate that cannot fail is not a gate
 ```
 
-The `--controls` sweep runs `COOKBOOK_BREAK` against all six gated recipes and
-asserts 6/6 fail correctly. A gate that stays green under deliberate sabotage is
+The `--controls` sweep runs `COOKBOOK_BREAK` against all eight gated recipes and
+asserts 8/8 fail correctly. A gate that stays green under deliberate sabotage is
 not measuring anything; this is the same discipline the package's own
 `torture:controls` lane uses. Never widen a budget to make a gate pass -- if a
 recipe fails the S1 numbers, the code is wrong, not the gate.

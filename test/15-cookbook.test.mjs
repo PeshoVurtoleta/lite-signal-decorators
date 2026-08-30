@@ -216,31 +216,33 @@ test("CB-A1 every manifest recipe has >= 1 tagged doc block", () => {
     }
 });
 
-test("CB-A1 ground-truth counts: 39 regions / 39 doc tags / 3 pointers / 12 companions", () => {
+test("CB-A1 ground-truth counts: 51 regions / 51 doc tags / 3 pointers / 18 companions", () => {
     const { docBlocks, pointers } = collectDocBlocks(readLines(join(ROOT, "COOKBOOK.md")));
     const regions = collectRegions();
-    assert.equal(regions.size, 39, "expected 39 companion regions, saw " + regions.size);
-    assert.equal(docBlocks.size, 39, "expected 39 doc tags, saw " + docBlocks.size);
+    assert.equal(regions.size, 51, "expected 51 companion regions, saw " + regions.size);
+    assert.equal(docBlocks.size, 51, "expected 51 doc tags, saw " + docBlocks.size);
     assert.equal(pointers.length, 3, "expected 3 pointer tags, saw " + pointers.length);
-    assert.equal(companionFiles().length, 12, "expected 12 companions, saw " + companionFiles().length);
+    assert.equal(companionFiles().length, 18, "expected 18 companions, saw " + companionFiles().length);
 });
 
 // ---------------------------------------------------------------------------
 // 2. MANIFEST SANITY
 // ---------------------------------------------------------------------------
 
-test("MANIFEST 12 entries r0..r11, companions exist, gated set exact, reasons non-empty", () => {
+test("MANIFEST 18 entries r0..r17, companions exist, gated set exact, reasons non-empty", () => {
     const manifest = loadManifest();
     const ids = manifest.recipes.map((r) => r.id);
-    assert.deepEqual(ids, ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11"],
-        "manifest ids are not exactly r0..r11 in order: " + ids.join(","));
+    assert.deepEqual(ids,
+        ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "r11",
+            "r12", "r13", "r14", "r15", "r16", "r17"],
+        "manifest ids are not exactly r0..r17 in order: " + ids.join(","));
     for (const rec of manifest.recipes) {
         assert.ok(existsSync(join(ROOT, rec.companion)),
             rec.id + ": companion " + rec.companion + " does not exist");
     }
     const gated = manifest.recipes.filter((r) => r.gc === "gated").map((r) => r.id).sort();
-    assert.deepEqual(gated, ["r1", "r10", "r2", "r4", "r5", "r9"].sort(),
-        "gated set is not exactly {r1,r2,r4,r5,r9,r10}: " + gated.join(","));
+    assert.deepEqual(gated, ["r1", "r2", "r4", "r5", "r9", "r10", "r13", "r17"].sort(),
+        "gated set is not exactly {r1,r2,r4,r5,r9,r10,r13,r17}: " + gated.join(","));
     for (const rec of manifest.recipes) {
         if (rec.gc === "none") {
             assert.ok(typeof rec.reason === "string" && rec.reason.trim().length > 0,

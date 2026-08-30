@@ -108,6 +108,60 @@
       "gc": "none",
       "reason": "a mixed worked migration that states its cost per layer; the reactive layer is proven elsewhere (r4, r5), the store layer is not zero-GC by r6's published reason",
       "cites": ["@zakkster/lite-signal", "@zakkster/lite-store"]
+    },
+    {
+      "id": "r12",
+      "title": "Wait for a condition, as a Promise",
+      "tier": "working",
+      "companion": "cookbook/r12-when-promise.mjs",
+      "gc": "none",
+      "reason": "lite-await allocates a Promise per call by design -- a lifecycle boundary, not a frame path; whenAsync stays refused (PD-30)",
+      "cites": ["@zakkster/lite-await", "@zakkster/lite-signal"]
+    },
+    {
+      "id": "r13",
+      "title": "React to a computed value, not every write",
+      "tier": "working",
+      "companion": "cookbook/r13-reaction-split.mjs",
+      "gc": "gated",
+      "reason": "",
+      "cites": ["@zakkster/lite-gc-profiler", "@zakkster/lite-signal"]
+    },
+    {
+      "id": "r14",
+      "title": "Tie teardown to an AbortSignal",
+      "tier": "working",
+      "companion": "cookbook/r14-abort-dispose.mjs",
+      "gc": "none",
+      "reason": "a teardown boundary, not a frame path; disposeReactive runs once per instance off any hot loop",
+      "cites": []
+    },
+    {
+      "id": "r15",
+      "title": "Async state without async in the graph",
+      "tier": "working",
+      "companion": "cookbook/r15-async-state.mjs",
+      "gc": "none",
+      "reason": "settlement allocates at the boundary by design (the promise handler + the Promise); the graph only ever sees synchronous signal writes",
+      "cites": []
+    },
+    {
+      "id": "r16",
+      "title": "Read without subscribing",
+      "tier": "basics",
+      "companion": "cookbook/r16-untrack-peek.mjs",
+      "gc": "none",
+      "reason": "a cold single-read demonstration of peek()/untrack; the zerogc torture lanes own the read budgets",
+      "cites": ["@zakkster/lite-signal"]
+    },
+    {
+      "id": "r17",
+      "title": "Pro: start the resource when someone is watching",
+      "tier": "pro",
+      "companion": "cookbook/r17-on-observed.mjs",
+      "gc": "gated",
+      "reason": "",
+      "cites": ["@zakkster/lite-gc-profiler", "@zakkster/lite-leak", "@zakkster/lite-signal"]
     }
   ]
 }

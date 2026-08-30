@@ -58,11 +58,14 @@
     "install_caveat": "The sibling source read here is 1.2.0 but that version is NOT published; a devDep on @zakkster/lite-await resolves to npm latest 1.1.1. fromPromise and whenSignal are documented since 1.1.0 (catalog card) and are cross-version stable; still, CB-T7 must pin the devDep to a PUBLISHED version (1.1.1) and NOT to 1.2.0.",
     "source": "/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteAwait/Await.js",
     "dts": "/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteAwait/Await.d.ts",
-    "probed": "2026-08-30",
+    "probed": "2026-08-30. r12/r15 run against the INSTALLED peer 1.1.1 (node_modules/@zakkster/lite-await/llms.txt Public API + package.json:version). r12 executed withResolvers + whenSignal(thunk) + whenTruthy(box, rejects) + TimeoutError paths; r15 names fromPromise in prose only.",
     "registry_verdict": "default-registry-only (fromPromise signal created via top-level signal capture, Await.js:19 / :998)",
     "symbols": [
       { "name": "fromPromise", "signature": "fromPromise<T>(promise: Promise<T>, initialData?: T): Signal<AsyncState<T>>", "note": "Await.js:998 / Await.d.ts:245. AsyncState<T> = { status:'pending'; data:T|undefined; error:undefined } | { status:'resolved'; data:T; error:undefined } | { status:'rejected'; data:T|undefined; error:unknown } (Await.d.ts:32-35). The returned signal lands in the DEFAULT registry. Allocates a Promise per call by design (lifecycle boundary, not a frame path) -- r8 is not gated for that reason." },
-      { "name": "whenSignal", "signature": "whenSignal<T>(source: () => T, predicate: (value: T) => unknown, opts?: AwaitOptions): Promise<T>", "note": "Await.d.ts:62. Resolves with the first value where predicate(source()) is truthy; supports timeout and AbortSignal; always cleans the underlying effect on settle. Resolves on the next microtask if already satisfied." }
+      { "name": "whenSignal", "signature": "whenSignal<T>(source: () => T, predicate: (value: T) => unknown, opts?: AwaitOptions): Promise<T>", "note": "Await.d.ts:62. Resolves with the first value where predicate(source()) is truthy; supports timeout and AbortSignal; always cleans the underlying effect on settle. Resolves on the next microtask if already satisfied. r12 wraps a VM member read in a thunk: whenSignal(() => vm.member, pred, opts)." },
+      { "name": "withResolvers", "signature": "withResolvers<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void }", "note": "Await.d.ts:123 (installed llms.txt Public API). The ES2024 Promise.withResolvers(), implemented directly. One object literal + one Promise per call; no opts, no pooling. r12's manual 'when' builds its deferred from this." },
+      { "name": "whenTruthy", "signature": "whenTruthy<T>(source: () => T, opts?: AwaitOptions): Promise<T>", "note": "Await.d.ts:170. Convenience over whenSignal(source, Boolean, opts). r12 probe (2026-08-30, cookbook/r12-when-promise.mjs): whenTruthy(boxOf(vm,key)) rejects TypeError 'whenSignal: source must be a function' -- a SignalBox is non-callable, so the box handle does NOT compose; the thunk form does." },
+      { "name": "TimeoutError", "signature": "class TimeoutError extends Error { readonly name: \"TimeoutError\"; timeout: number }", "note": "Await.d.ts:44-45. The rejection type for any awaiter given { timeout } that does not settle in time. r12 asserts it on the timeout variant." }
     ]
   },
   "@zakkster/lite-signal-dom": {
@@ -104,7 +107,10 @@
       { "name": "createRegistry", "note": "Bound reactive registry factory; r1/r9/r10 size one from capacityFor(...) and host their fleets on it." },
       { "name": "effect", "note": "Reactive effect; r1 tracks each instance from inside a short-lived effect so reclamation is deterministic." },
       { "name": "forEachOwned", "note": "Walks the nodes a registry owns; r7 composes it with rootOf + labelOf to serialize a VM." },
-      { "name": "stats", "note": "Default-registry ledger snapshot { activeNodes, totalAllocations, totalDisposals, ... }; r1/r4/r10 read it as the conservation proof." }
+      { "name": "stats", "note": "Default-registry ledger snapshot { activeNodes, totalAllocations, totalDisposals, poolGrowths, ... }; r1/r4/r10/r17 read it as the conservation proof." },
+      { "name": "observeObservers", "signature": "observeObservers(handle: ReactiveHandle, hooks?: ObserveObserversHooks): Unobserve", "note": "Signal.d.ts:425 (top-level binding) / :343 (Registry.observeObservers method). Hooks interface ObserveObserversHooks Signal.d.ts:175-180 { onConnect?: () => void; onDisconnect?: () => void }. Fires on the 0->1 observer transition after registration and on 1->0; TRANSITION-ONLY (no immediate fire if already observed); re-tracking a persistently-read source does not churn; returns an idempotent Unobserve; TypeError on a non-handle. r17's onBecomeObserved/onBecomeUnobserved over boxOf(vm,key). Top-level binds the DEFAULT registry (PD-29 wall): a custom-registry box is invisible to it -- verified 2026-08-30 in cookbook/r17-on-observed.mjs." },
+      { "name": "untrack", "signature": "untrack<T>(fn: () => T): T", "note": "Signal.d.ts:419. Runs fn with tracking suspended; reads inside add no dependencies. r16 imports it for a whole-block untracked snapshot; deliberately NOT re-exported by the decorators package (surface stays 18)." },
+      { "name": "peek", "signature": "SignalBox<T>.peek(): T / ComputedBox<T>.peek(): T", "note": "Signal.d.ts:55/:69/:86/:101 -- peek() is on every box shape (Signal, Computed, SignalBox, ComputedBox). Reads the current value WITHOUT tracking. r16 calls boxOf(vm,key).peek(); it is a box method, not an import." }
     ]
   },
   "@zakkster/lite-watch-ex": {

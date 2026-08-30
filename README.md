@@ -10,9 +10,10 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-Types-informational?style=for-the-badge)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
-> Stage-3 decorators that turn a plain class into a reactive view-model with a
-> measured per-property cost, one deterministic teardown, and poison-on-dispose
-> safety -- built on @zakkster/lite-signal.
+> Standard decorators (TC39 decorators proposal, Stage 2.7 since 2026-05; TS
+> 5.x / Babel 2023-11 emit unchanged) that turn a plain class into a reactive
+> view-model with a measured per-property cost, one deterministic teardown, and
+> poison-on-dispose safety -- built on @zakkster/lite-signal.
 
 **`@reactive accessor` fields, `@derived` getters, `@reactiveEffect` methods, `@batched` actions, one `@reactiveHost` wiring site -- and `disposeReactive()` tears the whole instance down in one call, every time, with nothing left dangling. A decorated read costs ~1.0x a hand-written instance-field signal read. An instance costs exactly P + D + E + 1 pool nodes and gives all of them back on dispose. A buildless twin, `defineReactive()`, delivers the identical feature set with zero transpiler.**
 
@@ -70,7 +71,7 @@ npm i @zakkster/lite-signal-decorators @zakkster/lite-signal
 
 `@zakkster/lite-signal` (`>=1.5.0 <2.0.0`) is a **peer dependency**, and that is a correctness requirement, not a formality: your decorated instances, your raw signals, and the engine's node pool must live in ONE reactive graph. A second nested copy of the engine would silently split that graph. Install both at the top level.
 
-ESM-only. Ships TypeScript definitions. Node >= 18. The `@` syntax needs a Stage-3 decorator toolchain (TypeScript 5 or Babel `2023-11` -- see [Compatibility](#compatibility)); [`defineReactive`](#definereactiveclass-spec---class) needs nothing.
+ESM-only. Ships TypeScript definitions. Node >= 18. The `@` syntax needs a standard-decorators toolchain (TypeScript 5 or Babel `2023-11` -- see [Compatibility](#compatibility)); [`defineReactive`](#definereactiveclass-spec---class) needs nothing.
 
 ### Quick start
 
@@ -259,7 +260,7 @@ With labels and audit off, the zero-GC budgets are byte-identical to 0.3.0 -- th
 | Export | Value |
 |---|---|
 | `ReactiveDisposedError` | `extends Error`; `name: "ReactiveDisposedError"`; fields `className`, `key`. Thrown on ANY touch of a disposed instance's surface. |
-| `VERSION` | `"1.1.0"` |
+| `VERSION` | `"1.1.1"` |
 
 ### The rejection matrix
 
@@ -376,7 +377,7 @@ The ~7 ns over raw batch is the guarded thunk + rest-array the decorator allocat
 | `disposeReactive(vm)` | none | allocation-free success path; poison handles are prebuilt per member at decoration time |
 | `boxOf` / `rootOf` / any throw | cold path | introspection and failure paths may allocate; never on the hot path |
 
-The gates that hold it (run on every change, all green at 1.1.0):
+The gates that hold it (run on every change, all green at 1.1.1):
 
 - `npm test` / `npm run test:gc` -- **257/257** on both lanes.
 - Suite gate (lite-leak + lite-gc-profiler): `leak=size 0/0 findings=0 warnings=0 | gc major=0 minor=0 maxMs=0.00 | ok`.
@@ -412,11 +413,11 @@ npm run test:gc     # the same 257 with --expose-gc (enables the allocation asse
 npm run gate        # the full pre-publish chain (section 10): fixtures -> test -> test:gc -> torture -> controls -> peer-preview (non-blocking) -> bench selftest -> cookbook -> pack
 ```
 
-**257 tests** across sixteen files, all green at 1.1.0. The decorator protocol is tested three times over: against a mock Stage-3 emitter *and* against committed real TypeScript 5 and Babel `2023-11` emits, so both toolchains' codegen is pinned, not assumed.
+**257 tests** across sixteen files, all green at 1.1.1. The decorator protocol is tested three times over: against a mock standard-decorators emitter *and* against committed real TypeScript 5 and Babel `2023-11` emits, so both toolchains' codegen is pinned, not assumed.
 
 | File | Tests | Covers |
 |---|---:|---|
-| `01-protocol-mock` | 30 | Decorator protocol on the mock Stage-3 emitter: wiring, values, options, rejection matrix |
+| `01-protocol-mock` | 30 | Decorator protocol on the mock standard-decorators emitter: wiring, values, options, rejection matrix |
 | `02-fixtures-ts` | 19 | The same laws on real TypeScript 5 emit (committed fixtures) |
 | `03-fixtures-babel` | 19 | The same laws on real Babel `2023-11` emit |
 | `04-fixture-freshness` | 2 | Fixture hashes match the sources (stale-emit guard) + the README emit-matrix block matches its generator |
@@ -435,7 +436,7 @@ npm run gate        # the full pre-publish chain (section 10): fixtures -> test 
 
 ### Emit-support matrix
 
-Three fixture sources, two Stage-3 emitters, both emit lanes -- every cell below is a committed, hash-pinned fixture (the `04-fixture-freshness` guard above). The table is generated from the fixture manifest, so a re-emit that changes a byte is loud, not silent:
+Three fixture sources, two standard-decorators emitters, both emit lanes -- every cell below is a committed, hash-pinned fixture (the `04-fixture-freshness` guard above). The table is generated from the fixture manifest, so a re-emit that changes a byte is loud, not silent:
 
 <!-- EMIT-MATRIX:START -->
 Generated by `node test/fixtures/emit-matrix.mjs` from `test/fixtures/hashes.json` -- do not hand-edit. Toolchain pinned by the committed fixtures: **TypeScript 5.9.3**, **@babel/core 7.29.7** + **@babel/plugin-proposal-decorators 7.29.7** (`version: 2023-11`). Each `sha256` is the first 12 hex of the committed emit; `npm run fixtures` regenerates and `test/04-fixture-freshness` fails loudly on any drift.
@@ -496,7 +497,7 @@ The `demo/` directory is dev-only -- it never enters `package.json` `files[]` an
 
 | Path | Requirement |
 |---|---|
-| `@` decorator syntax | A Stage-3 (2023-11) decorator toolchain: **TypeScript >= 5.0** (standard decorators -- leave `experimentalDecorators` unset/false) or **Babel** with `["@babel/plugin-proposal-decorators", { "version": "2023-11" }]`. Both emits are first-class: the suite pins each with committed fixtures. |
+| `@` decorator syntax | A standard-decorators (2023-11) toolchain: **TypeScript >= 5.0** (standard decorators -- leave `experimentalDecorators` unset/false) or **Babel** with `["@babel/plugin-proposal-decorators", { "version": "2023-11" }]`. Both emits are first-class: the suite pins each with committed fixtures. |
 | `defineReactive` | Nothing. Any ESM runtime. |
 | Runtime | Node >= 18 (ESM-only, `sideEffects: false`); browsers via any ESM bundler or native modules. No DOM dependency anywhere in the package. |
 | Peer | `@zakkster/lite-signal` `>=1.5.0 <2.0.0`, installed at the top level (one engine instance, one graph). |
@@ -529,7 +530,7 @@ Verified against the installed `signal-utils@0.21.1`: `@signal` (on accessors or
 | `@signal accessor x` (or `@signal get x`) | `@reactive accessor x` |
 | `@cached get y()` | `@derived get y()` |
 | no disposal API at all | `disposeReactive(vm)` -- **and it disposes**: cascade teardown, poison swap, node-exact conservation |
-| Stage-3 build required | `defineReactive(Class, spec)` -- the buildless door signal-utils has no equivalent for |
+| Standard-decorators build required | `defineReactive(Class, spec)` -- the buildless door signal-utils has no equivalent for |
 
 The cross-framework numbers behind this table are stamped in [`decisions/0006-kill-criteria.md`](decisions/0006-kill-criteria.md) (both engines measured through their documented class APIs at checksum-identical work).
 
@@ -561,14 +562,14 @@ The cross-framework numbers behind this table are stamped in [`decisions/0006-ki
 
 ### The cookbook
 
-[`COOKBOOK.md`](https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md) collects twelve composition recipes over the frozen 16-export surface -- how to build the things this package deliberately does not ship a decorator for, by composing the ones it does. Its headline is the **MobX-parity-by-composition matrix**, mapping each remaining MobX construct (`observable.array`, `observable.map`, `observable.deep`, `toJS`, `when`, `runInAction`, `observe`/`intercept`) to a decorator, a suite member, or a recipe -- extending the migration tables above to the rest of MobX with the honest note per row. It walks the **two-plane fleet** (a sim plane of arena columns written raw per frame beside a reactive plane of a handful of committed members), the reactive-collection-without-a-node-per-element pattern, and the **lite-store boundary** where document state meets class state -- stated plainly as the one path that is *not* zero-GC, and why. Every code block is byte-verified against a runnable, GC-gated companion in `cookbook/` (`npm run cookbook`), so a quoted recipe cannot drift from working code. It is delivered GitHub-only -- the installed tarball stays the lean 7-file runtime surface (decisions/0009).
+[`COOKBOOK.md`](https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md) collects eighteen composition recipes over the frozen 18-export surface -- how to build the things this package deliberately does not ship a decorator for, by composing the ones it does. Its headline is the **MobX-parity-by-composition matrix**, mapping each remaining MobX construct (`observable.array`, `observable.map`, `observable.deep`, `toJS`, `when`, `runInAction`, `observe`/`intercept`) to a decorator, a suite member, or a recipe -- extending the migration tables above to the rest of MobX with the honest note per row. It walks the **two-plane fleet** (a sim plane of arena columns written raw per frame beside a reactive plane of a handful of committed members), the reactive-collection-without-a-node-per-element pattern, and the **lite-store boundary** where document state meets class state -- stated plainly as the one path that is *not* zero-GC, and why. Every code block is byte-verified against a runnable, GC-gated companion in `cookbook/` (`npm run cookbook`), so a quoted recipe cannot drift from working code. It is delivered GitHub-only -- the installed tarball stays the lean 7-file runtime surface (decisions/0009).
 
 ---
 
 ## FAQ
 
 **Why the `accessor` keyword?**
-It is the Stage-3 mechanism that gives a decorator both an `init` hook (create the box during field initialization -- eagerly, so the getter carries no `if (!box)` lazy branch) and replaceable get/set bodies, without per-instance `defineProperty` calls or a base class. `@reactive` on a plain field is a named throw pointing you to `accessor`.
+It is the standard-decorators protocol mechanism that gives a decorator both an `init` hook (create the box during field initialization -- eagerly, so the getter carries no `if (!box)` lazy branch) and replaceable get/set bodies, without per-instance `defineProperty` calls or a base class. `@reactive` on a plain field is a named throw pointing you to `accessor`.
 
 **How is this different from MobX's `@observable`?**
 Philosophy: MobX trades allocation and administration overhead for maximal transparency; this package trades a little syntax (`accessor`, explicit dispose) for zero hot-path allocation, a node-exact instance cost, and a teardown you can prove. There is no proxy, no administration object per instance, and nothing is left for the GC to find "eventually" -- which is precisely what makes 10k-instance fleets and long sessions flat.
