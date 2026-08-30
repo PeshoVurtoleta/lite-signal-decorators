@@ -1,6 +1,6 @@
 # @zakkster/lite-signal-decorators
 
-VERSION 1.3.0
+VERSION 1.4.0
 
 > Standard-decorators layer over @zakkster/lite-signal, built on the TC39
 > decorators proposal (Stage 2.7 since 2026-05; TS 5.x / Babel 2023-11 emit
@@ -22,7 +22,7 @@ zero decorator syntax, sharing the SAME core by function identity.
 slot for a poison handle, so any later read/write throws a named
 `ReactiveDisposedError`.
 
-## Exports (21)
+## Exports (22)
 
 - `reactive` -- `@reactive accessor x = v` (bare) or `@reactive({ equals })`
   (factory). Declares a per-instance signal.
@@ -116,6 +116,22 @@ slot for a poison handle, so any later read/write throws a named
   cached). Double-probed: an inconclusive or polluted probe throws, never
   guesses. `nodes` = P+L+D+E+1; `links` = the first-full-read link count. See
   "Introspection & audit".
+- `costOfInstance(vm) -> { nodes, links, signals, locals, deriveds, effects }` --
+  the LIVE measured cost of one wired instance right now, walked from its own
+  graph. The delta from `costOf` IS the feature: `costOf` answers "what will an
+  instance of this class cost" (it forces every derived to the constructed
+  ceiling), `costOfInstance` answers "what does THIS instance cost right now" --
+  an unforced lazy derived or an untaken dynamic branch has formed no links yet,
+  so `links` reads BELOW `costOf` for the same shape until the graph is
+  exercised; `nodes` matches regardless. Read every derived once and the two
+  agree exactly (forced parity === costOf). UNCACHED by design -- a live graph
+  mutates, so a cached number would lie; every call re-walks. Allocates its
+  frozen result by design (one object per call, ~71 B/op, cold like snapshotOf --
+  reported, never gated). Needs no stats() ledger, so it measures instances on
+  hand-rolled registries where `costOf` fails closed. Fails closed on a
+  disposed/parked instance with a NAMED throw -- a parked vm holds zero nodes and
+  a silent `{ nodes: 0 }` is indistinguishable from a bug -- and on unwired,
+  no-plan, or prewired-member values. See "Introspection & audit".
 - `capacityFor(inventory, { headroom }?) -> RegistryConfig` -- size a
   `createRegistry` config from `[Factory, count]` pairs. Nodes exact, links x
   `headroom` (default 1). Fail-closed inventory validation.
@@ -126,7 +142,7 @@ slot for a poison handle, so any later read/write throws a named
   `FinalizationRegistry` reports any instance GC'd without `disposeReactive`.
 - `ReactiveDisposedError` -- `extends Error`, `name` `"ReactiveDisposedError"`,
   fields `className` and `key`.
-- `VERSION` -- `"1.3.0"`.
+- `VERSION` -- `"1.4.0"`.
 
 ## Registry law (one registry per host chain)
 
@@ -270,7 +286,9 @@ an additive MINOR -> 19 exports; the 1.0.0 canon (`makeGet`/`makeSet`/
 and pays its own measured cost. 1.3.0 adds `forEachReactive` + `snapshotOf`
 (decisions/0013 ladder) as an additive MINOR -> 21 exports; `snapshotOf` is the
 named in-package consumer that admits `forEachReactive` under the 0009 bar, and
-the 1.0.0 canon stays byte-identical. The semver promise from here: any change to an existing export's
+the 1.0.0 canon stays byte-identical. 1.4.0 adds `costOfInstance` (decisions/0013
+criterion (b); the demo is the named consumer) as an additive MINOR -> 22
+exports; the 1.0.0 canon stays byte-identical. The semver promise from here: any change to an existing export's
 signature or behavior is a MAJOR, recorded in a decision file; new exports are
 minors; the hot accessor canon (`makeGet`/`makeSet`) does not move without a
 major. Also present since

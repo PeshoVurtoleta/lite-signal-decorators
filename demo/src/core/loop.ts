@@ -31,7 +31,9 @@ import {
     disposeReactive,
     capacityFor,
     costOf,
+    costOfInstance,
 } from "../../../SignalDecorators.js";
+import type { ReactiveCost } from "../../../SignalDecorators.js";
 import { createRegistry } from "@zakkster/lite-signal";
 
 // --- fleet geometry -----------------------------------------------------------
@@ -64,6 +66,12 @@ export function effectFires(): number {
 // size `world`. Constructed once by capacityFor's costOf probe, then never
 // instantiated again. deriveds are FIXED-shape (each reads the same members
 // every time regardless of value), so capacityFor provisions exactly.
+//
+// The twin's REMAINING job is sizing ONLY (0009 candidate 4 -> v1.4.0): the
+// world registry must be provisioned BEFORE any real Entity can exist, and
+// costOf cannot take ctor args, so a twin is still the only way to size upfront.
+// The shape-drift wall below is no longer twin-vs-twin -- it is now a LIVE
+// measurement of a real Entity via costOfInstance.
 const EntityShape = defineReactive(class EntityShape {}, {
     signals: { x: 0, y: 0, vx: 0, vy: 0 },
     deriveds: {
@@ -107,18 +115,24 @@ export class Entity {
     @reactiveEffect tick() { effectFireCount++; void this.speed; }
 }
 
-// Shape-drift wall: construct one real Entity, measure its true node delta on
-// `world`, and prove it equals the twin's measured per-VM cost. If the decorated
-// class and the twin ever diverge, capacityFor would under- or over-provision
-// `world`; fail closed here rather than let the fleet run mis-sized.
+// Shape-drift wall -- now a LIVE measurement (0009 candidate 4 -> v1.4.0):
+// construct one real Entity, FORCE each derived once so the instance reports the
+// constructed CEILING (costOfInstance is parity-with-costOf once every lazy
+// derived has been read -- nodes agree regardless, links only after forcing),
+// measure its true per-VM cost with costOfInstance, and prove nodes equal the
+// twin's costOf number. If the decorated class and the twin ever diverge,
+// capacityFor would under- or over-provision `world`; fail closed here rather
+// than let the fleet run mis-sized. Cold boot path only -- costOfInstance
+// allocates its frozen result, so it never rides a frame.
 function assertShapeAgrees(): void {
-    const before = world.stats().activeNodes;
     const probe = new Entity();
-    const delta = world.stats().activeNodes - before;
+    void probe.speed;                       // force the deriveds -> ceiling numbers
+    void probe.load;
+    const live = costOfInstance(probe);
     disposeReactive(probe);
-    if (delta !== NODES_PER_VM) {
+    if (live.nodes !== NODES_PER_VM) {
         throw new Error(
-            "loop.ts shape drift: decorated Entity occupies " + delta +
+            "loop.ts shape drift: a live Entity measures " + live.nodes +
             " nodes but the measurement twin sized " + NODES_PER_VM +
             " -- capacityFor provisioned world for the wrong shape.",
         );
@@ -154,6 +168,20 @@ export function nodesPerVm(): number { return NODES_PER_VM; }
 /** The Plane A registry stats snapshot (activeNodes/activeLinks/poolGrowths/
  *  ledger). Read-only; reading stats forms no graph edge. */
 export function worldStats() { return world.stats(); }
+
+/**
+ * costOfInstance of the first live fleet member -- the LIVE measured cost of one
+ * real Entity on `world` right now (not the twin's ceiling). A live member's
+ * `load` derived is never read, so its links read BELOW the forced ceiling: the
+ * documented live-vs-probe delta, surfaced in the HUD. COLD: the frozen result
+ * allocates one object per call, so the HUD must call this on its tick cadence
+ * only, NEVER per frame. Returns null when the fleet is empty. Slots [0, count)
+ * are dense, so slot 0 is always a live member whenever count > 0.
+ */
+export function firstMemberCost(): Readonly<ReactiveCost> | null {
+    if (count === 0) return null;
+    return costOfInstance(slots[0] as Entity);
+}
 
 /**
  * Spawn `n` entities into free slots. Spawning past N_MAX lets the engine's

@@ -425,6 +425,34 @@ export interface ReactiveCost {
  */
 export function costOf(Factory: new (...args: any[]) => any): Readonly<ReactiveCost>;
 
+/**
+ * Measure the cost of ONE live, wired instance right now -- no probe, no
+ * construction, no ctor args, no registry pollution. Returns a per-call frozen
+ * `ReactiveCost` in costOf's exact shape, WALKED from the live graph:
+ * `nodes = 1 + signals + locals + forEachOwned(rootOf(vm))` (the deriveds and
+ * user effects the anchor adopted), and `links` is the un-deduped sum of
+ * forEachSource over the anchor, every owned node, and every signal/local box.
+ *
+ * THE LIVE-VS-PROBE CONTRACT. This number is the truth NOW. costOf forces every
+ * derived to report the constructed CEILING; costOfInstance reports what THIS
+ * instance costs at this moment, so an unforced lazy derived or an untaken
+ * dynamic branch shows FEWER links than costOf for the same shape until the graph
+ * is exercised. `nodes` matches regardless. Read every derived once and the two
+ * agree exactly. The delta is the feature, not a bug.
+ *
+ * The frozen result allocates by design, one object per call (UNCACHED -- a live
+ * graph mutates, so a cached number would lie). The walk needs no stats() ledger,
+ * so costOfInstance measures instances on registries where costOf fails closed.
+ *
+ * @param vm a live, wired reactive instance.
+ * @throws {ReactiveDisposedError} if `vm` was disposed or parked (a parked vm
+ *   holds zero nodes; a silent `{ nodes: 0 }` would be indistinguishable from a
+ *   bug, so both fail closed).
+ * @throws if `vm` is not wired yet, has no reactive plan, or exposes a prewired
+ *   member slot.
+ */
+export function costOfInstance(vm: object): Readonly<ReactiveCost>;
+
 /** A `[Factory, count]` pair for {@link capacityFor}. */
 export type InventoryEntry = [new (...args: any[]) => any, number];
 
@@ -503,4 +531,4 @@ export class ReactiveDisposedError extends Error {
 // --- Version ------------------------------------------------------------------
 
 /** Package version. Kept in lockstep with package.json and llms.txt. */
-export const VERSION: "1.0.0";
+export const VERSION: "1.4.0";

@@ -29,6 +29,7 @@ export const $tPop = byId<HTMLElement>("tPop");
 export const $tBudget = byId<HTMLElement>("tBudget");
 export const $tNodes = byId<HTMLElement>("tNodes");
 export const $tLinks = byId<HTMLElement>("tLinks");
+export const $tVmCost = byId<HTMLElement>("tVmCost");
 export const $popBar = byId<HTMLElement>("popBar");
 export const $popFill = byId<HTMLElement>("popFill");
 

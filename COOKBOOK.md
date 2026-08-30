@@ -1284,6 +1284,10 @@ baseline with `poolGrowths === 0` (CB-A4).
   it against a class already bound to a one-slot world would overflow that world.
   The companion measures `fleetProbe` and binds `FleetVM` separately for exactly
   this reason.
+- Since 1.4.0, `costOfInstance(vm)` is the twin-free path for a fleet ALREADY
+  bound to its world: it measures a live member through its own registry (sizing
+  the world up front still needs the probe class -- `capacityFor` runs before
+  any instance exists).
 
 ## Recipe 10 -- Pro: registry isolation, and what refuses to cross
 

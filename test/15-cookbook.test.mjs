@@ -255,11 +255,11 @@ test("MANIFEST 18 entries r0..r17, companions exist, gated set exact, reasons no
 // 3. SURFACE FREEZE (CB-A2)
 // ---------------------------------------------------------------------------
 
-test("CB-A2 runtime module exports EXACTLY 21 names and the corpus cites only those", async () => {
+test("CB-A2 runtime module exports EXACTLY 22 names and the corpus cites only those", async () => {
     const mod = await import(SELF_PKG);
     const exportSet = new Set(Object.keys(mod));
-    assert.equal(exportSet.size, 21,
-        "expected exactly 21 exports, saw " + exportSet.size + ": " + [...exportSet].sort().join(","));
+    assert.equal(exportSet.size, 22,
+        "expected exactly 22 exports, saw " + exportSet.size + ": " + [...exportSet].sort().join(","));
 
     // Every decorators identifier imported anywhere in cookbook/*.mjs is a member.
     for (const f of companionFiles()) {
@@ -268,7 +268,7 @@ test("CB-A2 runtime module exports EXACTLY 21 names and the corpus cites only th
         if (!names) continue;
         for (const n of names) {
             assert.ok(exportSet.has(n),
-                f + " imports ghost API '" + n + "' from " + SELF_PKG + " (not in the 21-export surface)");
+                f + " imports ghost API '" + n + "' from " + SELF_PKG + " (not in the 22-export surface)");
         }
     }
 
@@ -322,7 +322,7 @@ test("PD-39 every pointer block's cited package is allow-listed and its imports 
     const citations = loadCitations();
     const { pointers } = collectDocBlocks(readLines(join(ROOT, "COOKBOOK.md")));
     for (const p of pointers) {
-        if (p.pkg === SELF_PKG) continue; // the self-pointer is covered by the 21-export freeze
+        if (p.pkg === SELF_PKG) continue; // the self-pointer is covered by the 22-export freeze
         const entry = citations[p.pkg];
         assert.ok(entry, "pointer block at COOKBOOK.md:" + p.line + " cites " + p.pkg + " with no citations.json entry");
         const symbols = citationSymbolNames(entry);
@@ -400,7 +400,7 @@ test("CB-A6b every relative link inside COOKBOOK.md resolves in the repo tree", 
 // 6. VERSION CONSISTENCY (27-parity adoption)
 // ---------------------------------------------------------------------------
 
-test("VERSION module.VERSION === package.json version === llms.txt line 3", async () => {
+test("VERSION module.VERSION === package.json version === llms.txt line 3 === SignalDecorators.d.ts literal", async () => {
     const mod = await import(SELF_PKG);
     const pkgVersion = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
     const llmsLine3 = readFileSync(join(ROOT, "llms.txt"), "utf8").split("\n")[2];
@@ -408,6 +408,10 @@ test("VERSION module.VERSION === package.json version === llms.txt line 3", asyn
     assert.ok(m, "llms.txt line 3 states no version: '" + llmsLine3 + "'");
     assert.equal(mod.VERSION, pkgVersion, "module VERSION " + mod.VERSION + " != package.json " + pkgVersion);
     assert.equal(m[1], pkgVersion, "llms.txt line 3 version " + m[1] + " != package.json " + pkgVersion);
+    const dts = readFileSync(join(ROOT, "SignalDecorators.d.ts"), "utf8");
+    const dm = dts.match(/export const VERSION:\s*"([^"]+)";/);
+    assert.ok(dm, "SignalDecorators.d.ts states no VERSION literal");
+    assert.equal(dm[1], pkgVersion, "SignalDecorators.d.ts VERSION literal " + dm[1] + " != package.json " + pkgVersion);
 });
 
 // ---------------------------------------------------------------------------

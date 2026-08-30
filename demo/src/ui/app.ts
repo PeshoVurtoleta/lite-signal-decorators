@@ -16,6 +16,7 @@ import {
     disposeStorm,
     population,
     worldStats,
+    firstMemberCost,
     effectFires,
     readPositions,
     createTelemetry,
@@ -25,7 +26,7 @@ import {
     $scene, $spark,
     $spawnRate, $killRate, $spawnVal, $killVal,
     $btnSpawn, $btnKill, $btnPause, $btnStorm, $btnTheme,
-    $tAlert, $tPop, $tBudget, $tNodes, $tLinks, $popBar, $popFill,
+    $tAlert, $tPop, $tBudget, $tNodes, $tLinks, $tVmCost, $popBar, $popFill,
     $tFps, $tFrame, $tEffect, $tChurn,
 } from "./dom.js";
 import { Spark } from "./spark.js";
@@ -243,6 +244,13 @@ function loop(now: number): void {
         $tNodes.textContent = "" + ws.activeNodes;
         $tLinks.textContent = "" + ws.activeLinks;
         $tEffect.textContent = "" + telemetry.effectFiresBox.peek();
+
+        // Live per-instance cost of one real fleet member (costOfInstance). It
+        // allocates its frozen result, so it rides THIS masked ~7.5 Hz tick and
+        // never the per-frame path. Live links sit below costOf's forced ceiling
+        // (the unread `load` derived): the documented live-vs-probe delta.
+        const vmCost = firstMemberCost();
+        $tVmCost.textContent = vmCost === null ? "--" : vmCost.nodes + "n/" + vmCost.links + "l";
     }
 
     frame = (frame + 1) | 0;

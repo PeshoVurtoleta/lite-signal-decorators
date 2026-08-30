@@ -147,6 +147,7 @@ const ReactivePlayer = defineReactive(Player, {
 - **Fail-closed everything** -- statics, private `#` members, unknown options, duplicate keys, orphaned members, invalid registries, half-valid specs: all named throws at decoration time, with a nearest-key did-you-mean where a typo is likely.
 - **Interop that stays raw** -- `boxOf(vm, key)` hands you the live engine box; `rootOf(vm)` hands the anchor descriptor to `forEachOwned` / lite-devtools. Decorated and hand-written signals share one graph.
 - **Introspection & migration (1.3.0)** -- `forEachReactive(vm, fn, arg)` walks every value-bearing member in plan order (`signal`/`local`/`derived`, effects excluded) with a zero-alloc `fn(key, box, kind, arg)` callback; `snapshotOf(vm)` returns a shallow plain-object copy read through the accessors under one `untrack` -- the native `toJS` this package now ships, safe to call inside an effect.
+- **Live per-instance cost (1.4.0)** -- `costOfInstance(vm)` walks one wired instance's own graph and reports what it costs RIGHT NOW: `costOf(Factory)` answers "what will an instance of this class cost" (it forces every derived to the constructed ceiling), `costOfInstance` answers "what does THIS instance cost" -- an unforced lazy derived or an untaken branch shows fewer links until the graph is exercised, and reading every derived once makes the two agree exactly. Twin-free: it needs no stats() ledger, so it measures instances on hand-rolled registries where `costOf` fails closed.
 
 ---
 
@@ -270,9 +271,19 @@ Symbol keys work (`Reflect.ownKeys`). A spec key colliding with an own property 
 | Export | Signature | Behavior |
 |---|---|---|
 | `costOf` | `(Factory) => { nodes, links, signals, deriveds, effects }` | The measured, settled per-instance cost, probed on the class's bound registry (frozen result, cached per class). Double-probed: an inconclusive or polluted probe THROWS -- never a guess. `nodes` is exactly P + L + D + E + 1; `links` is the first-full-read link count. |
+| `costOfInstance` (1.4.0) | `(vm) => { nodes, links, signals, locals, deriveds, effects }` | The LIVE cost of one wired instance right now, walked from its own graph -- no probe, no ctor args, no registry pollution. The delta from `costOf` IS the feature: `costOf` forces every derived to the constructed CEILING ("what will an instance of this class cost"), `costOfInstance` reports "what does THIS instance cost right now" -- an unforced lazy derived or an untaken branch has formed no links, so `links` reads BELOW `costOf` until the graph is exercised (`nodes` matches regardless; read every derived once and the two agree exactly). UNCACHED -- a live graph mutates, so a cached number would lie. Needs no stats() ledger, so it measures instances on hand-rolled registries where `costOf` fails closed. Allocates its frozen result by design (one object per call, ~71 B/op -- reported, never gated). Fails closed on a disposed/parked instance with a NAMED throw (a parked vm holds zero nodes; a silent `{ nodes: 0 }` is indistinguishable from a bug) and on unwired/no-plan/prewired values. |
 | `capacityFor` | `(inventory, { headroom }?) => RegistryConfig` | Sizes a `createRegistry` config from `[Factory, count]` pairs: nodes exact, links x `headroom` (floored at the engine minimum of 1), `prealloc: "eager"`, `onCapacityExceeded: "throw"`. Fail-closed inventory and options validation. Link policy + caveats: [decisions/0007](decisions/0007-capacity-policy.md). |
 | `enableLabels` / `labelOf` | `(on)` / `(idOrHandle, registry?) => string \| undefined` | Opt-in devtools identity (default OFF): while on, wiring registers per-registry `nodeId -> "Class.prop"` / `"Class#method"` / `"Class@anchor"`; dispose unregisters. `labelOf` misses return `undefined`, never throw. |
 | `auditReactive` | `(on)` | Opt-in leak auditor (default OFF): a lazily-created `FinalizationRegistry` reports any instance collected WITHOUT `disposeReactive`, naming class and shape. Holds no instance references itself; zero cost and zero registrations while off. |
+
+The `costOf`/`costOfInstance` split reads as a class-vs-instance pair:
+
+```js
+const cls = costOf(Enemy);            // ceiling: every derived forced
+const fresh = costOfInstance(inst);   // fresh.links < cls.links (a lazy derived unread)
+inst.threat; inst.range;              // exercise the deriveds, then re-measure
+costOfInstance(inst).links === cls.links;  // now exact
+```
 
 With labels and audit off, the zero-GC budgets are byte-identical to 0.3.0 -- the hot accessor canon is untouched by all four (review-diffed against the published 0.3.0 tarball).
 
@@ -288,7 +299,7 @@ With labels and audit off, the zero-GC budgets are byte-identical to 0.3.0 -- th
 | Export | Value |
 |---|---|
 | `ReactiveDisposedError` | `extends Error`; `name: "ReactiveDisposedError"`; fields `className`, `key`. Thrown on ANY touch of a disposed instance's surface. |
-| `VERSION` | `"1.3.0"` |
+| `VERSION` | `"1.4.0"` |
 
 ### The rejection matrix
 
@@ -408,10 +419,11 @@ The ~7 ns over raw batch is the guarded thunk + rest-array the decorator allocat
 | `boxOf` / `rootOf` / any throw | cold path | introspection and failure paths may allocate; never on the hot path |
 | `forEachReactive` walk | none | gated: 1e6 hoisted-callback walks measure **0.002 B/walk** (vs the 0.000 B/op zero-alloc control -- within a +2-byte limit), `gc.major === 0`; the 4-scalar `fn(key, box, kind, arg)` carries no descriptor object and the `arg` pass-through kills the caller's closure |
 | `snapshotOf(vm)` | 1 plain object | **by design** -- the returned copy allocates (**95.8 B/op measured**, 1e5 cycles); REPORTED in the torture summary line, never gated. The walk *under* it stays zero-alloc; cold, off any frame path |
+| `costOfInstance(vm)` | 1 frozen object | **by design** -- the per-call frozen result allocates (**71.3 B/op measured**, 1e4 calls); the measurement itself is `gc.major === 0` over those 1e4 calls -- REPORTED, never gated. The graph walk *under* it allocates nothing (module-slot visitors, no per-call closure); cold, off any frame path |
 
-The gates that hold it (run on every change, all green at 1.3.0):
+The gates that hold it (run on every change, all green at 1.4.0):
 
-- `npm test` / `npm run test:gc` -- **313/313** on both lanes.
+- `npm test` / `npm run test:gc` -- **335/335** on both lanes.
 - Suite gate (lite-leak + lite-gc-profiler): `leak=size 0/0 findings=0 warnings=0 | gc major=0 minor=0 maxMs=0.00 | ok`.
 - Torture: **18 scenarios** (zero-GC read/write lanes at `maxMajor 0, maxPauseMs 4`; 4096-cycle leak gate at 0 live / 0 findings / 0 warnings; capacity atomicity at every overflow point; a 300-seed x 20k-op oracle with zero divergences; the `reinit-torture` acquire/release gate; the `localto-torture` zero-alloc read/write storm + ABA-stale interleave lattice + pooled park/reinit; the `introspection-torture` 1e6 hoisted-callback `forEachReactive` walk at `maxMajor 0` with the snapshot-allocates figure reported, never gated) -- **16 run + 2 that skip correctly below their peer floors** (`scope-adoption` needs 1.6.0, `using-dispose` needs 1.9.0; the installed peer is 1.5.0). A skip *below* a floor is the forward-compat design working; a skip *at or above* it is a FAIL (run.mjs enforces floor-escalation). Every scenario carries a `TORTURE_BREAK` sabotage control that must exit non-zero -- **18/18 controls** prove each gate can actually fail.
 - `churn-soak` + `fleet-soak`: sustained construct/use/dispose and a 10s 2k-VM fleet tick; pools at floor and retained heap flat at every sample.
@@ -445,12 +457,12 @@ Full rationale lives in [`decisions/`](decisions/) -- each is a numbered, dated 
 ## Testing (for clients & QA)
 
 ```bash
-npm test            # node --test, 313 tests
-npm run test:gc     # the same 313 with --expose-gc (enables the allocation assertions)
+npm test            # node --test, 335 tests
+npm run test:gc     # the same 335 with --expose-gc (enables the allocation assertions)
 npm run gate        # the full pre-publish chain (section 10): fixtures -> test -> test:gc -> torture -> controls -> peer-preview (non-blocking) -> bench selftest -> cookbook -> pack
 ```
 
-**313 tests** across eighteen files, all green at 1.3.0. The decorator protocol is tested three times over: against a mock standard-decorators emitter *and* against committed real TypeScript 5 and Babel `2023-11` emits, so both toolchains' codegen is pinned, not assumed.
+**335 tests** across nineteen files, all green at 1.4.0. The decorator protocol is tested three times over: against a mock standard-decorators emitter *and* against committed real TypeScript 5 and Babel `2023-11` emits, so both toolchains' codegen is pinned, not assumed.
 
 | File | Tests | Covers |
 |---|---:|---|
@@ -468,10 +480,11 @@ npm run gate        # the full pre-publish chain (section 10): fixtures -> test 
 | `12-accounting` | 11 | `costOf` node/link/shape grid (double-probe, frozen + cached, fail-closed) + `capacityFor` budget sizing |
 | `13-labels-audit` | 10 | `enableLabels`/`labelOf` per-registry identity + `auditReactive` leak reporting, both opt-in and default-OFF |
 | `14-qa-s4-boundary` | 21 | S4 adversarial edges: stats-less facade closure, signals-only capacity floor, label/audit boundary matrix |
-| `15-cookbook` | 14 | [`COOKBOOK.md`](https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md) drift/parity: each fenced block byte-compared against its tagged companion `#region` (both directions + both-way coverage), surface freeze (exactly 21 exports), citation allowlist, link law, static-cost probe |
+| `15-cookbook` | 14 | [`COOKBOOK.md`](https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md) drift/parity: each fenced block byte-compared against its tagged companion `#region` (both directions + both-way coverage), surface freeze (exactly 22 exports), citation allowlist, link law, static-cost probe, and the four-place VERSION sync (module const === package.json === llms.txt === `SignalDecorators.d.ts` literal) |
 | `16-reinit` | 29 | Pooled-reinit lattice on both emit lanes: park/reinit/dispose transitions, the five `reinitReactive` fail-closed states, parked-touch throws by name, `initials` boundary matrix (0..N+1 keys, null/undefined, NaN/-0 verbatim), `Symbol.dispose` on a parked instance, accessor descriptors byte-identical across reinit, self-release re-entrancy, ledger conservation |
 | `17-localto` | 34 | `@localTo` on both emit lanes + buildless `locals`: the read/write/upstream-reset lattice, both initial flavors (follow-from-wiring vs reset-from-initial), the ABA stale-local contract, `equals` override survival, park/reinit box+seen reset, `costOf` = P+L+D+E+1, source-throw fail-closed, and the fail-closed option/source matrix |
 | `18-introspection` | 22 | `forEachReactive`/`snapshotOf` on both emit lanes + buildless: plan-order walk (signals, locals, deriveds; ancestor-first), symbol keys, the `signal`/`local`/`derived` kind tags, effect/batched exclusion, count return + `arg` pass-through, the untracked-read law (snapshotOf inside an effect fires once), r7 `{name,hp,mp,alive}` parity, the PD-62 accessor-read reset honesty, and the fail-closed non-reactive/unwired/parked/disposed matrix |
+| `19-cost-instance` | 22 | `costOfInstance` on both emit lanes + buildless: A1 parity-when-forced (=== `costOf`, nodes/links/every kind count), A2 delta-when-lazy (links strictly lower, then monotonic toward the forced number), `@localTo` counted in locals with zero graph links, the frozen `{nodes,links,signals,locals,deriveds,effects}` shape, A3 registry-untouched over 10000 calls, PD-72 bound-registry + stats-less-facade measurement (where `costOf` fails closed), PD-70 uncached/live across a branch flip, and the A6 fail-closed matrix (plain/unwired/parked/disposed each a NAMED throw, never a `{nodes:0}` report) |
 
 ### Emit-support matrix
 
@@ -527,6 +540,8 @@ npm run demo:check          # verify the committed bundle matches its recorded h
 npm run demo:gc             # headless GC-budget lane over the fleet core (maxMajor 0)
 npm run demo:storm          # headless dispose-storm retention lane (lite-leak, size 0)
 ```
+
+Since 1.4.0 the console is the named consumer of `costOfInstance`: its shape-drift wall measures a real live `Entity` (its node count === the `EntityShape` sizing twin's) and the HUD reports one live fleet member's `costOfInstance` per HUD tick, so the live-vs-`costOf` delta -- a forced ceiling against the lazy live cost -- is visible on screen. The `EntityShape` twin stays for `capacityFor` sizing only (the world must be sized before it exists).
 
 The `demo/` directory is dev-only -- it never enters `package.json` `files[]` and never ships to consumers.
 
@@ -602,7 +617,7 @@ The cross-framework numbers behind this table are stamped in [`decisions/0006-ki
 
 ### The cookbook
 
-[`COOKBOOK.md`](https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md) collects eighteen composition recipes over the frozen 21-export surface -- how to build the things this package deliberately does not ship a decorator for, by composing the ones it does. Its headline is the **MobX-parity-by-composition matrix**, mapping each remaining MobX construct (`observable.array`, `observable.map`, `observable.deep`, `toJS`, `when`, `runInAction`, `observe`/`intercept`) to a decorator, a suite member, or a recipe -- extending the migration tables above to the rest of MobX with the honest note per row. It walks the **two-plane fleet** (a sim plane of arena columns written raw per frame beside a reactive plane of a handful of committed members), the reactive-collection-without-a-node-per-element pattern, and the **lite-store boundary** where document state meets class state -- stated plainly as the one path that is *not* zero-GC, and why. Every code block is byte-verified against a runnable, GC-gated companion in `cookbook/` (`npm run cookbook`), so a quoted recipe cannot drift from working code. It is delivered GitHub-only -- the installed tarball stays the lean 7-file runtime surface (decisions/0009).
+[`COOKBOOK.md`](https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md) collects eighteen composition recipes over the frozen 22-export surface -- how to build the things this package deliberately does not ship a decorator for, by composing the ones it does. Its headline is the **MobX-parity-by-composition matrix**, mapping each remaining MobX construct (`observable.array`, `observable.map`, `observable.deep`, `toJS`, `when`, `runInAction`, `observe`/`intercept`) to a decorator, a suite member, or a recipe -- extending the migration tables above to the rest of MobX with the honest note per row. It walks the **two-plane fleet** (a sim plane of arena columns written raw per frame beside a reactive plane of a handful of committed members), the reactive-collection-without-a-node-per-element pattern, and the **lite-store boundary** where document state meets class state -- stated plainly as the one path that is *not* zero-GC, and why. Every code block is byte-verified against a runnable, GC-gated companion in `cookbook/` (`npm run cookbook`), so a quoted recipe cannot drift from working code. It is delivered GitHub-only -- the installed tarball stays the lean 7-file runtime surface (decisions/0009).
 
 ---
 

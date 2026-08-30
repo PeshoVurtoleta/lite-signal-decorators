@@ -318,6 +318,137 @@ let live = 0, findingsN = 0, warnsN = 0;
     );
 }
 
+// ===============================================================================
+// S10-A4 -- costOfInstance is UNCACHED and allocates ONE frozen result per call
+// (PD-69): 1e4 costOfInstance walks over a forced P=4,L=1,D=2,E=1 instance. The
+// per-call frozen { nodes, links, signals, locals, deriveds, effects } is the ONLY
+// allocation, so major GC stays 0 and the pause floor holds; its bytes/op are
+// MEASURED and REPORTED (never gated vs zero -- the same discipline as the
+// snapshot line above). Minors are reported honestly against a zero-alloc control.
+// ===============================================================================
+
+let costSummary, costMinor, costCtlMinor, costBytesPerOp;
+
+{
+    const vm = new Intro();
+    void vm.d0; void vm.d1;              // force the lazy deriveds so links are settled
+
+    const COST_OPS = 10000;              // 1e4, the S10-A4 lane size
+
+    // Zero-alloc control minors in THIS process (decision 0003) -- reported, not a
+    // gate on the cost lane (which allocates the frozen result by design).
+    const costControl = await gcGate("intro-cost-control", (i) => (i & 7), {
+        ops: COST_OPS,
+        warmup: COST_OPS,
+        maxMajor: 0,
+        maxPauseMs: 4,
+    });
+    costCtlMinor = costControl.gc.minor;
+
+    let csink = 0;
+    const costOp = (i) => { const c = pkg.costOfInstance(vm); csink = (csink + c.nodes + c.links) | 0; return c.nodes; };
+    costSummary = await gcGate("intro-cost", costOp, {
+        ops: COST_OPS,
+        warmup: 5000,
+        maxMajor: 0,                     // STRICT: the walk itself allocates nothing
+        maxPauseMs: 4,                   // STRICT
+    });
+    costMinor = costSummary.gc.minor;
+    if (csink === -1) console.log("unreachable");
+
+    // The MEASURED bytes/op: retain every frozen result inside a forced-GC bracket
+    // so the delta IS the result footprint (REPORTED, never gated vs zero).
+    function forceGc() { globalThis.gc(); globalThis.gc(); }
+    function heapNow() { forceGc(); return process.memoryUsage().heapUsed; }
+    const kept = new Array(COST_OPS);
+    const a = heapNow();
+    for (let i = 0; i < COST_OPS; i++) kept[i] = pkg.costOfInstance(vm);
+    const b = heapNow();
+    costBytesPerOp = (b - a) / COST_OPS;
+
+    // Sanity: every retained result is a distinct frozen report of the right shape.
+    check(
+        Object.isFrozen(kept[0]) && kept[0].nodes === NODES_PER_INSTANCE,
+        () => "S10-A4: a cost result must be a frozen report with nodes=" + NODES_PER_INSTANCE + " (saw " + kept[0].nodes + ")",
+    );
+    check(kept[0] !== kept[1], () => "S10-A4: costOfInstance must be UNCACHED -- two calls returned the same object");
+    check(costBytesPerOp > 0, () => "S10-A4: the per-call frozen result must allocate (measured " + costBytesPerOp.toFixed(1) + " B/op)");
+    kept.length = 0;
+
+    pkg.disposeReactive(vm);
+}
+
+// ===============================================================================
+// S10-A5 -- conservation across the full lifecycle: 1000 wire/measure/park/reinit/
+// dispose cycles under a lite-leak tracker. costOfInstance is measured on the LIVE
+// instance and again after reinit; the tracker must return to 0, activeNodes to
+// the exact pre-loop baseline, and poolGrowths must not move.
+// ===============================================================================
+
+let cycLive = 0, cycFindings = 0, cycWarns = 0;
+
+{
+    const CYCLES = 1000;                 // 1e3, the S10-A5 lane size
+
+    const leaks = [];
+    const warns = [];
+    const tracker = createLeakTracker({
+        name: NAME + "-cost",
+        onLeak: (r) => leaks.push(r.kind + ":" + String(r.tag)),
+        onWarning: (w) => warns.push(w.kind + ":" + w.reason),
+    });
+    tracker.registerKernel(createOwnerCascadeOrphanKernel());
+    tracker.registerKernel(createObserverOrphanKernel());
+
+    // Held-value-safe: release captures nothing, the tag is a detached primitive.
+    function release() {}
+    const AUDIT = { audit: true };
+
+    const preLoop = { activeNodes: stats().activeNodes, poolGrowths: stats().poolGrowths };
+
+    let msink = 0;
+    for (let i = 0; i < CYCLES; i++) {
+        RUN.op = i;
+        const inst = new Intro();                // wire
+        const tag = i & 255;
+        const stop = effect(function () { tracker.track(inst, release, tag, AUDIT); });
+        void inst.d0; void inst.d1;
+        msink = (msink + pkg.costOfInstance(inst).nodes) | 0;   // measure (live)
+        check(
+            pkg.releaseReactive(inst) === true,
+            () => "S10-A5: releaseReactive failed at cycle " + i,
+        );                                        // park
+        pkg.reinitReactive(inst);                 // reinit (revive)
+        void inst.d0; void inst.d1;
+        msink = (msink + pkg.costOfInstance(inst).nodes) | 0;   // measure again (revived)
+        pkg.disposeReactive(inst);                // dispose
+        stop();
+    }
+    if (msink === -1) console.log("unreachable");
+    RUN.op = -1;
+
+    await settle();
+    globalThis.gc();
+    await settle();
+
+    cycLive = tracker.size();
+    cycFindings = tracker.audit().length;
+    cycWarns = warns.length;
+
+    check(cycWarns === 0, () => "S10-A5: kernel warnings emitted: " + warns.join(","));
+    check(cycFindings === 0, () => "S10-A5: audit findings emitted");
+    check(leaks.length === 0, () => "S10-A5: leak callbacks fired: " + leaks.join(","));
+    check(cycLive === 0, () => "S10-A5: tracker retained " + cycLive + " handle(s) -- an instance outlived its owner");
+    check(
+        stats().activeNodes === preLoop.activeNodes,
+        () => "S10-A5: activeNodes " + stats().activeNodes + " != pre-loop baseline " + preLoop.activeNodes,
+    );
+    check(
+        stats().poolGrowths === preLoop.poolGrowths,
+        () => "S10-A5: poolGrowths moved by " + (stats().poolGrowths - preLoop.poolGrowths) + " -- the pool had to grow",
+    );
+}
+
 // --- overall conservation ------------------------------------------------------
 
 assertConserved(SCENARIO_BASE, "introspection-torture final");
@@ -330,7 +461,11 @@ process.stdout.write(
     " | T11 snapshot=1e5 gc major=" + snapSummary.gc.major + " minor=" + snapMinor +
     " maxMs=" + snapSummary.gc.maxMs.toFixed(2) +
     " bytes/op=" + snapBytesPerOp.toFixed(1) + " (allocates by design, not gated)" +
-    " | A4 leak size=" + live + "/0 findings=" + findingsN + " warnings=" + warnsN + "\n",
+    " | A4 leak size=" + live + "/0 findings=" + findingsN + " warnings=" + warnsN +
+    " | S10-A4 cost=1e4 gc major=" + costSummary.gc.major + " minor=" + costMinor +
+    " (ctl=" + costCtlMinor + ") maxMs=" + costSummary.gc.maxMs.toFixed(2) +
+    " bytes/op=" + costBytesPerOp.toFixed(1) + " (allocates by design, not gated)" +
+    " | S10-A5 cycles=1e3 leak size=" + cycLive + "/0 findings=" + cycFindings + " warnings=" + cycWarns + "\n",
 );
 
 pass(NAME);

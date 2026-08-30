@@ -241,6 +241,7 @@ instead. NONE is admitted.
    the two-plane fleet (r9), which uses a measurement-twin to size Plane A. The
    demo already pays this cost. Served instead: the recipe builds the twin shape
    and calls `costOf` on it. No named consumer -> NOT admitted.
+   ADMITTED 2026-08-30 (v1.4.0) under decisions/0013 criterion (b) -- the demo's shape-drift wall + HUD are the named consumers; the EntityShape twin's remaining job is capacityFor sizing only.
 
 A FIFTH candidate -- fleet helpers (a sized-registry + eager-prealloc + throw
 convenience over `capacityFor` + `createRegistry`) -- is anticipated by PLAN-S6

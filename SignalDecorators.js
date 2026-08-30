@@ -1,5 +1,5 @@
 /**
- * @zakkster/lite-signal-decorators v1.3.0
+ * @zakkster/lite-signal-decorators v1.4.0
  * --------------------
  * Standard-decorators layer over @zakkster/lite-signal. Turns a plain class into
  * a reactive view-model with measured per-instance cost and deterministic
@@ -45,6 +45,8 @@ import {
     batch,
     untrack,
     stats,
+    forEachOwned,
+    forEachSource,
 } from "@zakkster/lite-signal";
 
 // --- Module state -------------------------------------------------------------
@@ -172,6 +174,14 @@ const DEFAULT_REG = Object.freeze({
     // wiring/dispose paths use); costOf reads it here for the default registry,
     // and every custom Registry from createRegistry() exposes it natively.
     stats,
+    // `forEachOwned`/`forEachSource` join the facade the same way (S10): each
+    // registry owns its NODE_PTR symbol, so a handle is walkable ONLY by the
+    // registry that minted it. costOfInstance routes its walk through a plan's
+    // own `reg`, so the default-registry path needs these two here; a custom
+    // Registry from createRegistry() carries them natively. Not in REG_METHODS
+    // (the wiring/dispose paths never walk).
+    forEachOwned,
+    forEachSource,
 });
 
 // The 11 method names a valid Registry must expose (duck-check set, PD-11).
@@ -2132,6 +2142,122 @@ export function costOf(Factory) {
     return result;
 }
 
+// Module-level walk accumulators for costOfInstance. forEachOwned/forEachSource
+// call fn(descriptor) with NO carrier arg, so the visitor cannot thread state
+// through a parameter the way forEachReactive's `arg` does. Reusing three module
+// slots (never a per-call closure) keeps the frozen result the ONLY allocation
+// (PD-69). Non-reentrant by construction: a cost walk never re-enters
+// costOfInstance, so the single-threaded ESM model makes the shared slots safe.
+let COST_INSTANCE_REG = null;
+let COST_INSTANCE_OWNED = 0;
+let COST_INSTANCE_LINKS = 0;
+
+// Tally one source edge (called per forEachSource visit across anchor, owned
+// nodes, and signal/local boxes).
+function costInstanceLinkVisit(node) {
+    COST_INSTANCE_LINKS++;
+}
+
+// Tally one owned node (a derived or user effect adopted by the anchor) and fold
+// its source edges into the link total in the same pass.
+function costInstanceOwnedVisit(node) {
+    COST_INSTANCE_OWNED++;
+    COST_INSTANCE_REG.forEachSource(node, costInstanceLinkVisit);
+}
+
+/**
+ * Measure the cost of ONE live, wired instance right now -- no probe, no
+ * construction, no ctor args, no registry pollution. Returns a per-call frozen
+ * `{ nodes, links, signals, locals, deriveds, effects }` in costOf's exact shape.
+ * `nodes` is WALKED: 1 (the anchor) + plan.signals.length + plan.locals.length +
+ * every child forEachOwned(rootOf(vm)) yields (the deriveds and user effects the
+ * anchor adopted -- signal/local boxes are built pre-anchor and unadopted, so
+ * they are never owned). `links` is the sum of forEachSource over the anchor,
+ * every owned node, and every signal/local box, WITHOUT dedupe -- one edge per
+ * observer, matching costOf's activeLinks delta. Kind counts are read from the
+ * plan arrays, never walked.
+ *
+ * THE LIVE-VS-PROBE CONTRACT. This number is the truth NOW. costOf constructs a
+ * throwaway probe and FORCES every derived (:2079) to report the constructed
+ * CEILING -- "what will an instance of this class cost". costOfInstance reports
+ * what THIS instance costs at this moment: an unforced lazy derived and an
+ * untaken dynamic branch have formed no links yet, so `links` reads BELOW
+ * costOf's for the same shape until the graph is exercised. `nodes` matches
+ * regardless (owned children exist whether or not their links have formed). Read
+ * every derived once and the two agree exactly (A1 parity). The delta is the
+ * feature, not a bug -- fewer links means the instance has not paid for a branch
+ * it has not taken.
+ *
+ * ALLOCATION HONESTY. The frozen result allocates by design, one object per call,
+ * exactly like snapshotOf -- this is a cold introspection call, never a gated hot
+ * path (PD-69). There is no out-param variant; no consumer needs one. The walk
+ * itself allocates nothing (module-slot visitors, no per-call closure).
+ *
+ * UNCACHED (PD-70). costOf caches per class because a class shape is frozen at
+ * decoration; a live instance graph MUTATES (a derived forces, a branch flips),
+ * so a cached number would lie. Every call re-walks.
+ *
+ * WORKS WHERE costOf CANNOT (PD-72). The walk needs no stats() ledger, so
+ * costOfInstance measures an instance on a hand-rolled registry that carries the
+ * introspection walkers but not stats -- exactly the case costOf fails closed on
+ * (:2049).
+ *
+ * @throws {ReactiveDisposedError} if the instance was disposed or parked -- a
+ *   parked vm holds ZERO nodes, and a silent `{ nodes: 0 }` is indistinguishable
+ *   from a bug, so both states fail closed (PD-71).
+ * @throws if `vm` is not wired yet, has no reactive plan, or exposes a prewired
+ *   member slot.
+ */
+export function costOfInstance(vm) {
+    const plan = planOf(vm);
+    if (plan === undefined) throwNoPlan("costOfInstance");
+    const a = vm[ANCHOR];
+    if (a === undefined) throwNotWired("costOfInstance");
+    if (a === DISPOSED) throw new ReactiveDisposedError(plan.ctorName, "<root>");
+    if (a === PARKED) throw new ReactiveDisposedError(plan.ctorName, "<root>", true);
+    const reg = plan.reg;
+    COST_INSTANCE_REG = reg;
+    COST_INSTANCE_OWNED = 0;
+    COST_INSTANCE_LINKS = 0;
+    // Owned nodes = deriveds + user effects the anchor adopted; each contributes
+    // its source edges to the link tally as it is visited. Signals/locals are
+    // built pre-anchor (unadopted), so forEachOwned never yields them (:1234-1248).
+    reg.forEachOwned(a, costInstanceOwnedVisit);
+    // The anchor's own source edges.
+    reg.forEachSource(a, costInstanceLinkVisit);
+    // Signal + local boxes are not owned -- read each from its slot (the walker
+    // idiom from forEachReactive) and fold its source edges in. A prewired slot
+    // is impossible past the wired guard above, but the check fails closed if a
+    // partially-built instance is ever measured.
+    const sigs = plan.signals;
+    for (let i = 0; i < sigs.length; i++) {
+        const h = vm[sigs[i].slot];
+        if (h !== undefined && h[NONLIVE] === "prewired") throwPrewiredMember(plan.ctorName, sigs[i].key);
+        reg.forEachSource(h, costInstanceLinkVisit);
+    }
+    const locs = plan.locals;
+    for (let i = 0; i < locs.length; i++) {
+        const h = vm[locs[i].slot];
+        if (h !== undefined && h[NONLIVE] === "prewired") throwPrewiredMember(plan.ctorName, locs[i].key);
+        reg.forEachSource(h, costInstanceLinkVisit);
+    }
+    const sig = sigs.length;
+    const loc = locs.length;
+    const der = plan.deriveds.length;
+    const eff = plan.effects.length;
+    const nodes = 1 + sig + loc + COST_INSTANCE_OWNED;
+    const links = COST_INSTANCE_LINKS;
+    COST_INSTANCE_REG = null;                    // drop the registry ref (cold)
+    return Object.freeze({
+        nodes: nodes,
+        links: links,
+        signals: sig,
+        locals: loc,
+        deriveds: der,
+        effects: eff,
+    });
+}
+
 function throwCapInventory() {
     throw new TypeError(
         `${ERR}capacityFor(inventory) -- inventory must be a non-empty array of [Factory, count] pairs.`,
@@ -2359,4 +2485,4 @@ export function auditReactive(on) {
 // --- Version ------------------------------------------------------------------
 
 /** Package version. Kept in lockstep with package.json and llms.txt. */
-export const VERSION = "1.3.0";
+export const VERSION = "1.4.0";

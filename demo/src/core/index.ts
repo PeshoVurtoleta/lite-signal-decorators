@@ -15,6 +15,7 @@ export {
     population,
     nodesPerVm,
     worldStats,
+    firstMemberCost,
     effectFires,
     readPositions,
 } from "./loop.js";

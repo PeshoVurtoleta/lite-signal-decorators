@@ -4,6 +4,116 @@ All notable changes to `@zakkster/lite-signal-decorators` are documented here.
 The format follows Keep a Changelog; this project adheres to Semantic
 Versioning.
 
+## [1.4.0] - 2026-08-30
+
+The measured-instance pillar -- decisions/0013 criterion (b). `costOf(Factory)`
+answers "what will an instance of this class cost" by probing with NO ctor args,
+so a ctor-arg-dependent shape needs a measurement-twin class to size it;
+decisions/0009 candidate 4 recorded that absence plainly (r9 and the fleet demo
+both paid it). `costOfInstance(vm)` closes it: it measures a LIVE, wired instance
+by walking its OWN graph -- no probe, no twin, no registry pollution. The demo is
+the NAMED consumer that admits it under the 0009 bar (a new export needs a named
+consumer, and a recipe is not one): the console's shape-drift wall now measures a
+real `Entity` and the HUD reports a live fleet member's cost per tick. The
+`EntityShape` twin is honestly retained -- its remaining job is `capacityFor`
+sizing only (the world must be sized before it exists). Surface 21 -> 22.
+
+### Added
+
+- **`costOfInstance(vm) -> { nodes, links, signals, locals, deriveds, effects }`**
+  (22nd export) -- the LIVE per-instance cost, walked from the instance's own
+  graph: `nodes = 1 (anchor) + plan.signals.length + plan.locals.length +
+  forEachOwned(rootOf(vm))` (the deriveds and user effects the anchor adopted --
+  signal/local boxes are built pre-anchor and unadopted, so they are never
+  owned); `links` is the un-deduped sum of `forEachSource` over the anchor, every
+  owned node, and every signal/local box (one edge per observer, matching
+  `costOf`'s activeLinks delta); kind counts are read from the plan arrays, never
+  walked. THE LIVE-VS-PROBE CONTRACT is the feature: `costOf` forces every derived
+  to the constructed CEILING, `costOfInstance` reports what THIS instance costs
+  right now -- an unforced lazy derived or an untaken dynamic branch shows FEWER
+  links until the graph is exercised (`nodes` matches regardless; read every
+  derived once and the two agree exactly). UNCACHED (PD-70) -- a live graph
+  mutates, so a cached number would lie. Needs no `stats()` ledger (PD-72), so it
+  measures instances on hand-rolled registries where `costOf` fails closed.
+  Allocates its frozen result by design (one object per call, cold like
+  `snapshotOf`; PD-69, no out-param variant). Fails closed on a disposed/parked
+  instance with a NAMED `ReactiveDisposedError` (PD-71 -- a parked vm holds ZERO
+  nodes and a silent `{ nodes: 0 }` is indistinguishable from a bug) and on
+  unwired/no-plan/prewired-member values.
+- **`test/19-cost-instance.test.mjs`** (22 cases) -- both emit lanes + buildless:
+  A1 parity-when-forced (=== `costOf`, nodes/links/every kind count), A2
+  delta-when-lazy (links strictly lower, then monotonic toward the forced
+  number), a `@localTo` member counted in locals contributing ZERO graph links,
+  the frozen `{nodes,links,signals,locals,deriveds,effects}` shape, A3
+  registry-untouched over 10000 calls, PD-72 bound-registry + stats-less-facade
+  measurement (where `costOf` fails closed), PD-70 uncached/live across a branch
+  flip, and the A6 fail-closed matrix (plain/unwired/parked/disposed each a NAMED
+  throw, never a `{nodes:0}` report).
+- **The `introspection-torture` lane extended** with two `costOfInstance`
+  blocks: A4 -- 1e4 calls at `maxMajor 0`, `maxPauseMs <= 4.0`, the per-call
+  frozen result the only allocation (REPORTED, never gated); A5 -- 1000
+  wire/measure/park/reinit/dispose cycles with `tracker.size()` 0, `activeNodes`
+  to exact baseline, pool growths 0.
+- **The demo consumer** (never cut -- the admission ground): the console's
+  shape-drift wall measures a real live `Entity` via `costOfInstance` (its node
+  count === the sizing twin's) and the HUD reports one live fleet member's
+  `costOfInstance` per HUD tick (never per frame), so the live-vs-forced delta is
+  visible on screen. Cold boot / HUD-tick paths only; zero frame-loop cost.
+
+### Changed
+
+- **The export surface: 21 -> 22** -- an additive MINOR under the 1.0.0 semver
+  promise (new exports are minors). The 1.0.0 hot canon
+  (`makeGet`/`makeSet`/`makeDerivedGet`) stays byte-identical: `costOfInstance`
+  is cold and moves no accessor byte.
+- Version sync to 1.4.0 across FOUR sites now: `package.json`, the `VERSION`
+  const, `llms.txt` line 3, and the `SignalDecorators.d.ts` VERSION literal --
+  the last a NEW asserted sync site. The `.d.ts` literal had gone stale (it read
+  a prior version, escaping the three-place sweep since the d.ts VERSION line was
+  never gated); the owner caught it, so `test/15`'s VERSION-consistency test
+  gains a FOURTH leg that regexes the `.d.ts` literal and asserts it string-equals
+  `package.json`, killing that bug class.
+- `test/15` surface-freeze recount 21 -> 22 (all CB-A2 sites).
+
+### Measured (rig: Node v26.3.1, arm64 Apple M4 Pro, lite-signal 1.5.0)
+
+- A1 parity (forced): `costOfInstance(vm)` === `costOf(Factory)` for the same
+  shape once every derived is read once -- demo `Entity` nodes **7**, links
+  **3** (P2/L1/D2/E1), both paths identical; kind counts identical.
+- A2 delta (lazy): a fresh instance reads links **1 -> 2 -> 3** as its deriveds
+  are exercised, strictly below the forced number until the graph is exercised;
+  node counts equal throughout.
+- A standalone `@localTo` member contributes **ZERO** graph links (the upstream
+  compare is a plain per-instance slot, not an edge) -- measured, not assumed; it
+  counts in `locals` only.
+- 1e4 `costOfInstance` calls: **71.3 B/op** (the per-call frozen result), gc
+  major **0**, `maxPauseMs <= 4.0` -- REPORTED, never gated.
+- A3: 10000 calls leave the registry `stats()` snapshot byte-identical
+  (`activeNodes`/`activeLinks`/`totalDisposals` unchanged) -- the walk never
+  mutates the registry.
+- A5: 1000 wire/measure/park/reinit/dispose cycles -- `tracker.size()` 0,
+  `activeNodes` to exact baseline, pool growths 0.
+
+Records: decisions/0013 (strategic-admission track, criterion (b)),
+decisions/0009 (candidate 4, now stamped ADMITTED with the pre-admission absence
+preserved).
+
+### Gate output (section-10 chain, archived verbatim)
+
+```
+  fixtures              OK       exit 0 -- emit fixtures regenerated
+  test                  OK       exit 0 -- 335 pass / 0 fail
+  test:gc               OK       exit 0 -- 335 pass / 0 fail
+  torture               OK       exit 0 -- 16 passed, 2 skipped, 0 warned, 0 failed in 34.3s
+  torture:controls      OK       exit 0 -- 18 passed, 0 skipped, 0 warned, 0 failed in 3.6s
+  torture:peer-preview  REPORTED NON-BLOCKING -- lane completed (exit 0) [preview 1.9.0-preview.6 SUITE-GREEN 18/0/0/0; canary 1.9.0-canary.1 SUITE-GREEN 18/0/0/0]
+  bench:selftest        OK       exit 0 -- ALL PASS -- 22 passed, 0 failed
+  cookbook              OK       exit 0/0 -- corpus 18/18 companions ok in 2.1s; controls 8/8 controls fail correctly in 5.1s
+  pack                  OK       exit 0 -- 7/7 files, exact 7-name set, no demo/ no Publications/
+----------------------------------------------------------------------
+  GATE PASS -- 8 blocking steps + 1 non-blocking (peer-preview)
+```
+
 ## [1.3.0] - 2026-08-30
 
 The introspection/migration rung of the decisions/0013 strategic-admission
