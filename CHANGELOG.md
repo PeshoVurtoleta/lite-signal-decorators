@@ -4,6 +4,102 @@ All notable changes to `@zakkster/lite-signal-decorators` are documented here.
 The format follows Keep a Changelog; this project adheres to Semantic
 Versioning.
 
+## [1.2.0] - 2026-08-30
+
+The flagship of the decisions/0013 strategic-admission track: a story-grade,
+release-after-release ladder (S8 `@localTo` -> S9 `snapshotOf` -> S10
+`costOfInstance` -> S11 fleet helpers), and this is its first rung. `@localTo`
+clears strategic criterion (a) -- impossible to compose correctly on the shipped
+surface: PD-51 measured the effect-based recipe clobbering a user write one tick
+late, so glitch-free reset needs in-package compare-on-read machinery. The one
+release nobody else can copy from a recipe.
+
+### Added
+
+- **`@localTo(source, { equals? })`** -- upstream-keyed resettable local state
+  (19th export; the 18-member surface grows by exactly one). A field FOLLOWS
+  `source(self)` until someone writes it, a write OVERRIDES, and a changed
+  upstream RESETS it -- decided by compare-on-read, so it is glitch-free,
+  synchronous, and PURE (no box write on the read path; legal inside any
+  `@derived`). `source` is a REQUIRED tracked `(self) => value` fn read inline
+  (no extra node). `equals` (default `Object.is`) governs the upstream compare
+  ONLY -- the write path never compares.
+- **The `locals` buildless section** -- `defineReactive(Class, { ..., locals })`
+  with `locals: { key: { source, equals?, initial? } }`, the buildless twin of
+  `@localTo` (fail closed on a missing/non-fn source), full parity with the
+  decorator path on both emit lanes.
+- **The initial-value unification rule** (decisions/0014): a declared
+  initializer means the member STARTS there and resets on the first upstream
+  move (the `@trackedReset` flavor); an OMITTED initializer means the initial is
+  the source evaluated once at wiring and the member follows upstream from the
+  first read (the `@localCopy` flavor). One decorator, both field semantics,
+  selected by the natural syntax.
+- **The ABA contract, stated plainly** (decisions/0014, shipped + asserted): no
+  public revision counter exists (NodeDescriptor is `{id, kind, value}`), so the
+  upstream compare is VALUE-based. Upstream A -> local write X -> upstream B ->
+  upstream back to an equals-A value leaves the read showing the STALE LOCAL X --
+  the reset requires upstream to change relative to the last adoption, not to
+  have moved transitively. tracked-toolbox's `@localCopy` has the same property;
+  it is documented in README/llms.txt, pinned in torture (S8-A6), never softened.
+- **The `localto-torture` lane** (`test/torture/localto-torture.mjs`, scenario
+  13 of 17) with its own `TORTURE_BREAK` sabotage control: the zero-alloc
+  read/write storm, the ABA-stale write/reset interleave asserted AS the
+  contract, pooled park/reinit box+seen reset, and tracking-edge + pure-compute
+  pins.
+- **`test/17-localto.test.mjs`** (34 cases) -- the full lattice on both emit
+  lanes plus buildless `locals`: read/write/reset, both initial flavors, the ABA
+  contract, `equals` override survival, park/reinit reset, `costOf` accounting,
+  source-throw fail-closed, and the option/source rejection matrix.
+- Emit fixtures extended: `fixture.src.ts` gains a `@localTo` member; the two
+  compiled outs + the source hash regenerate (no new fixture row or file).
+
+### Changed
+
+- **The per-instance cost formula is now `P + L + D + E + 1`** (was `P + D + E +
+  1`): one signal box per local plus the anchor; the plain per-instance seen-slot
+  is never a node (+0). `costOf` returns the `L` term; `capacityFor` sizes it.
+  Reflected everywhere the formula appears in README/llms.txt.
+- The shipped `SignalDecorators.d.ts` header de-staged to emitter-named
+  phrasing (PD-49) -- a 1.1.1 zero-grep escapee (the sweep listed the `.js`
+  but not the `.d.ts`), caught by the S8 review.
+- **The export surface: 18 -> 19** -- an additive MINOR under the 1.0.0 semver
+  promise (new exports are minors). The 1.0.0 hot canon
+  (`makeGet`/`makeSet`/`makeDerivedGet`) stays byte-identical: `@localTo` ships
+  its own accessor bodies and pays its own measured cost.
+- Three-place version sync to 1.2.0 (`package.json`, the `VERSION` const,
+  `llms.txt`); the `test/15` surface-freeze recount 18 -> 19.
+
+### Measured (rig: Node v26.3.1, arm64 Apple M4 Pro, lite-signal 1.5.0)
+
+- A `@localTo` read measures **1.69x** a plain decorated read (two tracked reads
+  + a compare, versus one box read) -- documented as-is, not softened.
+- Read AND write storms at N and 8N: **0.000 B/op** (control-relative +2 B), gc
+  major **0**, `maxPauseMs <= 0.08`; a derived over one local holds EXACTLY 2
+  source edges (upstream + box), 0 extra nodes over 1e5 reads.
+- 4096 park/reinit cycles: `tracker.size()` 0, findings 0, warnings 0,
+  `activeNodes` to exact baseline, zero pool growths; release frees exactly
+  `P + L + D + E + 1` nodes.
+
+Records: decisions/0013 (strategic-admission track), decisions/0014 (the localTo
+contract + the ratified spike numbers), `spikes/localto-contract.mjs` (Q1..Q6,
+EXIT A green against peer 1.5.0).
+
+### Gate output (section-10 chain, archived verbatim)
+
+```
+  fixtures              OK       exit 0 -- emit fixtures regenerated
+  test                  OK       exit 0 -- 291 pass / 0 fail
+  test:gc               OK       exit 0 -- 291 pass / 0 fail
+  torture               OK       exit 0 -- 15 passed, 2 skipped, 0 warned, 0 failed in 33.5s
+  torture:controls      OK       exit 0 -- 17 passed, 0 skipped, 0 warned, 0 failed in 2.8s
+  torture:peer-preview  REPORTED NON-BLOCKING -- lane completed (exit 0) [preview 1.9.0-preview.6 SUITE-GREEN 17/0/0/0; canary 1.9.0-canary.1 SUITE-GREEN 17/0/0/0]
+  bench:selftest        OK       exit 0 -- ALL PASS -- 22 passed, 0 failed
+  cookbook              OK       exit 0/0 -- corpus 18/18 companions ok in 2.1s; controls 8/8 controls fail correctly in 5.1s
+  pack                  OK       exit 0 -- 7/7 files, exact 7-name set, no demo/ no Publications/
+----------------------------------------------------------------------
+  GATE PASS -- 8 blocking steps + 1 non-blocking (peer-preview)
+```
+
 ## [1.1.1] - 2026-08-30
 
 A docs-accuracy patch. No runtime, fixture, or emit-matrix byte changed; the

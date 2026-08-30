@@ -42,7 +42,7 @@ var __propKey = (this && this.__propKey) || function (x) {
     return typeof x === "symbol" ? x : "".concat(x);
 };
 import * as pkgNs from "../../../SignalDecorators.js";
-import { reactive, derived, reactiveHost, reactiveEffect, batched } from "../../../SignalDecorators.js";
+import { reactive, derived, reactiveHost, reactiveEffect, batched, localTo } from "../../../SignalDecorators.js";
 /** The package instance that built these classes (shares its PLANS WeakMap). */
 export const pkg = pkgNs;
 /** Recompute counters -- the derived bodies bump these so laziness/equals
@@ -219,3 +219,53 @@ export { Derived };
 // Undecorated subclass -- wires at Base's (inherited) host mark.
 export class Leaf extends Base {
 }
+// @localTo (0014): upstream-keyed resettable local state. `draft` carries an
+// initializer, so it STARTS at that value and resets to `src` on the first
+// upstream move (the @trackedReset flavor); `mirror` has no initializer, so it
+// FOLLOWS `src` from wiring (the @localCopy flavor). Node cost: P=1 (src) + L=2
+// (draft, mirror) + 1 anchor = 4 (seen slots are plain fields, 0 nodes).
+let Locals = (() => {
+    let _classDecorators = [reactiveHost];
+    let _classDescriptor;
+    let _classExtraInitializers = [];
+    let _classThis;
+    let _src_decorators;
+    let _src_initializers = [];
+    let _src_extraInitializers = [];
+    let _draft_decorators;
+    let _draft_initializers = [];
+    let _draft_extraInitializers = [];
+    let _mirror_decorators;
+    let _mirror_initializers = [];
+    let _mirror_extraInitializers = [];
+    var Locals = class {
+        static { _classThis = this; }
+        static {
+            const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(null) : void 0;
+            _src_decorators = [reactive];
+            _draft_decorators = [localTo((self) => self.src)];
+            _mirror_decorators = [localTo((self) => self.src)];
+            __esDecorate(this, null, _src_decorators, { kind: "accessor", name: "src", static: false, private: false, access: { has: obj => "src" in obj, get: obj => obj.src, set: (obj, value) => { obj.src = value; } }, metadata: _metadata }, _src_initializers, _src_extraInitializers);
+            __esDecorate(this, null, _draft_decorators, { kind: "accessor", name: "draft", static: false, private: false, access: { has: obj => "draft" in obj, get: obj => obj.draft, set: (obj, value) => { obj.draft = value; } }, metadata: _metadata }, _draft_initializers, _draft_extraInitializers);
+            __esDecorate(this, null, _mirror_decorators, { kind: "accessor", name: "mirror", static: false, private: false, access: { has: obj => "mirror" in obj, get: obj => obj.mirror, set: (obj, value) => { obj.mirror = value; } }, metadata: _metadata }, _mirror_initializers, _mirror_extraInitializers);
+            __esDecorate(null, _classDescriptor = { value: _classThis }, _classDecorators, { kind: "class", name: _classThis.name, metadata: _metadata }, null, _classExtraInitializers);
+            Locals = _classThis = _classDescriptor.value;
+            if (_metadata) Object.defineProperty(_classThis, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
+            __runInitializers(_classThis, _classExtraInitializers);
+        }
+        #src_accessor_storage = __runInitializers(this, _src_initializers, 10);
+        get src() { return this.#src_accessor_storage; }
+        set src(value) { this.#src_accessor_storage = value; }
+        #draft_accessor_storage = (__runInitializers(this, _src_extraInitializers), __runInitializers(this, _draft_initializers, 0));
+        get draft() { return this.#draft_accessor_storage; }
+        set draft(value) { this.#draft_accessor_storage = value; }
+        #mirror_accessor_storage = (__runInitializers(this, _draft_extraInitializers), __runInitializers(this, _mirror_initializers, void 0));
+        get mirror() { return this.#mirror_accessor_storage; }
+        set mirror(value) { this.#mirror_accessor_storage = value; }
+        constructor() {
+            __runInitializers(this, _mirror_extraInitializers);
+        }
+    };
+    return Locals = _classThis;
+})();
+export { Locals };

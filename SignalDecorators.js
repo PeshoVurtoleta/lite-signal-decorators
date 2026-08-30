@@ -1,5 +1,5 @@
 /**
- * @zakkster/lite-signal-decorators v1.1.1
+ * @zakkster/lite-signal-decorators v1.2.0
  * --------------------
  * Standard-decorators layer over @zakkster/lite-signal. Turns a plain class into
  * a reactive view-model with measured per-instance cost and deterministic
@@ -96,6 +96,13 @@ const CLOSURES = Symbol("lite-signal-decorators.closures");
 // wins. Keyed by the frozen signal rec (bounded by the class member count).
 const SIG_INITIAL = new WeakMap();
 
+// S8/PD-58: decorator-local field-initial for reinit reset. A @localTo member's
+// field-initializer value is captured (per member, first-seen) in makeLocalInit --
+// undefined means "no initializer" (the @localCopy flavor: reinit reseeds the box
+// from the current upstream). Buildless locals carry hasInitial + initFn on the
+// rec instead. Keyed by the frozen local rec (bounded by the class member count).
+const LOCAL_INITIAL = new WeakMap();
+
 // Scratch-frame stack (D-2h): decorator signal boxes are created in accessor
 // `init` during super()'s field initialization -- BEFORE wireInstance's
 // try/catch exists. Each init pushes its box here; the wrapper constructor
@@ -139,6 +146,7 @@ let AUDIT_FR = null;
 
 // Known option keys per decorator (unknown-key did-you-mean sets, PD-8/PD-11).
 const KNOWN_OPTION_KEYS = ["equals"];
+const LOCAL_OPTION_KEYS = ["equals"];
 const EFFECT_OPTION_KEYS = ["scheduler"];
 const HOST_OPTION_KEYS = ["registry"];
 const CAP_OPTION_KEYS = ["headroom"];
@@ -285,6 +293,12 @@ function throwBadScheduler(what) {
     );
 }
 
+function throwLocalSource() {
+    throw new TypeError(
+        `${ERR}localTo requires a source function: write \`@localTo((self) => self.upstream) accessor x = ...\`. \`source\` is a tracked (self) -> value read, not an option.`,
+    );
+}
+
 function throwUnknownOption(what, key, known) {
     const near = nearestKey(String(key), known);
     throw new TypeError(
@@ -423,9 +437,10 @@ function throwReinitInitials(ctorName) {
 function throwReinitInitialsKey(ctorName, key, plan) {
     const avail = [];
     for (let i = 0; i < plan.signals.length; i++) avail.push(keyLabel(plan.signals[i].key));
+    for (let i = 0; i < plan.locals.length; i++) avail.push(keyLabel(plan.locals[i].key));
     const near = nearestKey(keyLabel(key), avail);
     throw new Error(
-        `${ERR}reinitReactive(${ctorName}) initials carries key \`${keyLabel(key)}\` that is not a @reactive signal${near ? ` -- did you mean \`${near}\`?` : ""} Signals: ${avail.join(", ")}.`,
+        `${ERR}reinitReactive(${ctorName}) initials carries key \`${keyLabel(key)}\` that is not a @reactive signal or @localTo member${near ? ` -- did you mean \`${near}\`?` : ""} Resettable keys: ${avail.join(", ")}.`,
     );
 }
 
@@ -451,9 +466,9 @@ function throwDefineSpec() {
 }
 
 function throwUnknownSection(key) {
-    const near = nearestKey(keyLabel(key), ["signals", "deriveds", "effects", "host"]);
+    const near = nearestKey(keyLabel(key), ["signals", "locals", "deriveds", "effects", "host"]);
     throw new TypeError(
-        `${ERR}defineReactive spec got unknown section \`${keyLabel(key)}\`${near ? ` -- did you mean \`${near}\`?` : ""} Known sections: signals, deriveds, effects, host.`,
+        `${ERR}defineReactive spec got unknown section \`${keyLabel(key)}\`${near ? ` -- did you mean \`${near}\`?` : ""} Known sections: signals, locals, deriveds, effects, host.`,
     );
 }
 
@@ -538,6 +553,25 @@ function throwBadEffect(key) {
     );
 }
 
+function throwSpecLocals() {
+    throw new TypeError(
+        `${ERR}defineReactive spec.locals must be a map of key -> { source, equals?, initial? }.`,
+    );
+}
+
+function throwUnknownLocalDescKey(key, dk) {
+    const near = nearestKey(keyLabel(dk), ["source", "equals", "initial"]);
+    throw new TypeError(
+        `${ERR}defineReactive local ${keyLabel(key)} got unknown descriptor key \`${keyLabel(dk)}\`${near ? ` -- did you mean \`${near}\`?` : ""} Known keys: source, equals, initial.`,
+    );
+}
+
+function throwLocalSourceNotFn(key) {
+    throw new TypeError(
+        `${ERR}defineReactive local ${keyLabel(key)} \`source\` must be a function (self) -> value.`,
+    );
+}
+
 function throwSpecCollision(className, key) {
     throw new TypeError(
         `${ERR}defineReactive spec declares ${keyLabel(key)}, but ${className}.prototype already owns that member -- a spec-declared member cannot collide with a hand-written one.`,
@@ -550,6 +584,49 @@ function makeGet(slot) { return function () { return this[slot].get(); }; }
 function makeSet(slot) { return function (v) { this[slot].set(v); }; }
 function makeDerivedGet(slot) { return function () { return this[slot].get(); }; }
 
+// S8 hot bodies (0014): the @localTo accessor pair. NEW bodies -- the 1.0.0 canon
+// above stays byte-identical (S8-A5); @localTo pays its own measured cost. Both
+// are prebuilt ONCE per member and close over the member's slots + source + equals,
+// so a read/write allocates nothing (the same prebuilt-closure discipline as
+// makeGet/makeSet). Two per-instance stores back a local: the box slot (a signal
+// node, the local value) and the seen slot (a PLAIN field, the last-adopted
+// upstream value). makeLocalGet is PURE (0014 read law): it calls the tracked
+// source, equals-compares it against the seen slot, and returns the local box on
+// an UNCHANGED upstream, else the upstream value -- never writing any box on the
+// read path, so a localTo read is legal inside any @derived compute.
+function makeLocalGet(rec) {
+    const source = rec.source;
+    const eq = rec.eq;
+    const boxSlot = rec.slot;
+    const seenSlot = rec.seenSlot;
+    return function () {
+        const up = source.call(this, this);
+        if (eq(up, this[seenSlot])) return this[boxSlot].get();
+        return up;
+    };
+}
+// makeLocalSet: box.set (a write always overrides -- PD-56 never compares) + seen
+// slot = upstream-at-write. The seen capture must NOT subscribe: a write inside an
+// effect body runs under that effect's tracking scope, so a tracked source read
+// there would silently link the effect to the upstream (a fail-open dep leak,
+// measured: reg.isTracking() -> a bare source read re-fires the effect on an
+// upstream move). The isTracking() gate untracks ONLY under an active scope --
+// the same idiom makeEffectPublic uses (D-4b) -- so the plain-code write path
+// (the hot path) stays a zero-alloc source.call, and only the rare in-effect write
+// pays the untrack thunk. reg comes from the frozen rec.plan (set at claimPlan).
+function makeLocalSet(rec) {
+    const source = rec.source;
+    const boxSlot = rec.slot;
+    const seenSlot = rec.seenSlot;
+    return function (v) {
+        this[boxSlot].set(v);
+        const reg = rec.plan.reg;
+        this[seenSlot] = reg.isTracking()
+            ? reg.untrack(() => source.call(this, this))
+            : source.call(this, this);
+    };
+}
+
 function makeInit(rec) {
     return function (v) {
         if (rec.plan === null) throwMissingHost(rec);
@@ -559,6 +636,69 @@ function makeInit(rec) {
         // PD-44: record the first-seen field-initializer value as this decorator
         // signal's reinit reset value (per member, once; no per-instance retention).
         if (!SIG_INITIAL.has(rec)) SIG_INITIAL.set(rec, v);
+        return v;                              // emitter backing store, unused
+    };
+}
+
+// S8 (cold): seed one @localTo member's two stores on an instance. seen = the
+// source read at wiring, UNTRACKED (wiring/reinit must register no dependency);
+// the box starts at the declared initial when present, else at that same upstream
+// value (the initial-value unification rule, 0014: an initializer -> @trackedReset
+// flavor; no initializer -> @localCopy flavor). Returns the box for SCRATCH
+// rollback. Shared by the decorator init, the buildless wire loop, and reinit.
+function seedLocal(inst, rec, reg, hasInitial, initialValue) {
+    const source = rec.source;
+    const seen = reg.isTracking()
+        ? reg.untrack(() => source.call(inst, inst))
+        : source.call(inst, inst);
+    // The box is created WITHOUT the equals opts: {equals} governs the UPSTREAM
+    // compare only (PD-56); the box uses default equals so a local write always
+    // propagates (a write overrides, never suppresses).
+    const box = reg.signalBox(hasInitial ? initialValue : seen);
+    inst[rec.slot] = box;
+    inst[rec.seenSlot] = seen;
+    return box;
+}
+
+// S8 (cold): the frozen local rec, shared by the decorator (@localTo) and buildless
+// (spec.locals) paths. eq defaults to Object.is (0014 read law). initFn is null for
+// the decorator path (the box is born at field-init time, like a decorator signal)
+// and a per-instance factory for the buildless path (born in wireInstance).
+function makeLocalRec(key, slot, seenSlot, source, opts, initFn, hasInitial) {
+    const eq = opts !== undefined && opts.equals !== undefined ? opts.equals : Object.is;
+    const rec = {
+        kind: "local",
+        key,
+        slot,
+        seenSlot,
+        source,
+        eq,
+        opts,
+        get: null,
+        set: null,
+        fn: null,
+        plan: null,
+        poison: null,
+        prewired: null,
+        parked: null,
+        initFn,
+        hasInitial,
+    };
+    rec.get = makeLocalGet(rec);
+    rec.set = makeLocalSet(rec);
+    return rec;
+}
+
+// S8 (cold): the decorator @localTo init -- mirrors makeInit. The box + seen are
+// born during super()'s field initialization; the box joins the SCRATCH frame for
+// init-phase rollback. The field-initial value is captured per member (undefined
+// means "no initializer" -> the @localCopy reset flavor) for reinit.
+function makeLocalInit(rec) {
+    return function (v) {
+        if (rec.plan === null) throwMissingHost(rec);
+        const box = seedLocal(this, rec, rec.plan.reg, v !== undefined, v);
+        SCRATCH.push(box);                     // D-2h: track for init-phase rollback
+        if (!LOCAL_INITIAL.has(rec)) LOCAL_INITIAL.set(rec, v);
         return v;                              // emitter backing store, unused
     };
 }
@@ -579,6 +719,21 @@ function validateOptions(what, opts) {
         if (KNOWN_OPTION_KEYS.indexOf(keys[i]) === -1) throwUnknownOption(what, keys[i], KNOWN_OPTION_KEYS);
     }
     if ("equals" in opts && opts.equals !== undefined && typeof opts.equals !== "function") throwBadEquals(what);
+    if (opts.equals === undefined) return undefined;
+    return Object.freeze({ equals: opts.equals });
+}
+
+function validateLocalOptions(opts) {
+    // localTo's OWN key set (equals only) -- NOT the shared reactive/derived
+    // validator: admitting `source` there would silently accept @derived({source})
+    // (fail-open, PLAN-S8 spelling call). Returns a frozen { equals } or undefined.
+    if (opts === undefined || opts === null) return undefined;
+    if (typeof opts !== "object") throwUsage("localTo");
+    const keys = Object.keys(opts);
+    for (let i = 0; i < keys.length; i++) {
+        if (keys[i] !== "equals") throwUnknownOption("localTo", keys[i], LOCAL_OPTION_KEYS);
+    }
+    if ("equals" in opts && opts.equals !== undefined && typeof opts.equals !== "function") throwBadEquals("localTo");
     if (opts.equals === undefined) return undefined;
     return Object.freeze({ equals: opts.equals });
 }
@@ -666,6 +821,36 @@ export function reactive(target, ctx) {
     if (arguments.length >= 2) return applyReactive(target, ctx, undefined);
     const opts = validateOptions("reactive", target);
     return function (t, c) { return applyReactive(t, c, opts); };
+}
+
+// --- localTo (S8, 0014) -------------------------------------------------------
+
+function applyLocalTo(target, ctx, source, opts) {
+    if (!isStandardContext(ctx)) throwLegacyEmit("localTo");
+    if (ctx.kind !== "accessor") {
+        throwWrongKind("localTo", "accessor", ctx.kind, "write `@localTo(source) accessor x = ...`.");
+    }
+    if (ctx.static === true) throwStatic("localTo", ctx.name);
+    if (ctx.private === true) throwPrivate("localTo", ctx.name);
+    const nm = typeof ctx.name === "symbol" ? "local" : "local:" + String(ctx.name);
+    const rec = makeLocalRec(ctx.name, Symbol(nm), Symbol(nm + ":seen"), source, opts, null, false);
+    PENDING.push(rec);
+    return { get: rec.get, set: rec.set, init: makeLocalInit(rec) };
+}
+
+/**
+ * `@localTo(source) accessor x = v` -- upstream-keyed resettable local state
+ * (0014). Reads compare the tracked `source(self)` against a per-instance
+ * last-seen slot: an unchanged upstream yields the local override, a changed
+ * upstream resets to it. A write always overrides. With an initializer the member
+ * STARTS there and resets on the first upstream move; without one it FOLLOWS
+ * upstream from wiring. `@localTo(source)` or `@localTo(source, { equals })` --
+ * `equals` governs the upstream compare ONLY. `source` is REQUIRED.
+ */
+export function localTo(source, options) {
+    if (typeof source !== "function") throwLocalSource();
+    const opts = validateLocalOptions(options);
+    return function (t, c) { return applyLocalTo(t, c, source, opts); };
 }
 
 // --- derived ------------------------------------------------------------------
@@ -834,7 +1019,7 @@ function buildHandles(rec, ctorName) {
         get() { throw new ReactiveDisposedError(ctorName, key); },
         set(v) { throw new ReactiveDisposedError(ctorName, key); },
     });
-    const msg = rec.kind === "signal"
+    const msg = rec.kind === "signal" || rec.kind === "local"
         ? `${ERR}${ctorName}.${keyLabel(key)} read/write before its initializer ran (declaration order).`
         : `${ERR}${ctorName}.${keyLabel(key)} read before construction completed (deriveds are available after wiring).`;
     rec.prewired = Object.freeze({
@@ -882,6 +1067,7 @@ function claimPlan(C, ctorName, registry) {
     }
 
     const signals = [];
+    const locals = [];
     const deriveds = [];
     const effects = [];
     const byKey = new Map();
@@ -889,6 +1075,12 @@ function claimPlan(C, ctorName, registry) {
         for (let i = 0; i < ancestor.signals.length; i++) {
             const r = ancestor.signals[i];
             signals.push(r);
+            byKey.set(r.key, r);
+        }
+        // PD-55: locals live in their OWN array; L is a first-class accounting term.
+        for (let i = 0; i < ancestor.locals.length; i++) {
+            const r = ancestor.locals[i];
+            locals.push(r);
             byKey.set(r.key, r);
         }
         for (let i = 0; i < ancestor.deriveds.length; i++) {
@@ -920,7 +1112,7 @@ function claimPlan(C, ctorName, registry) {
         const rec = own[i];
         const desc = Object.getOwnPropertyDescriptor(proto, rec.key);
         let installed;
-        if (rec.kind === "signal" || rec.kind === "derived") {
+        if (rec.kind === "signal" || rec.kind === "derived" || rec.kind === "local") {
             installed = desc !== undefined && desc.get === rec.get;
         } else {
             installed = desc !== undefined && desc.value === rec.pub;
@@ -931,8 +1123,9 @@ function claimPlan(C, ctorName, registry) {
 
     for (let i = 0; i < own.length; i++) {
         const rec = own[i];
-        if (rec.kind === "signal" || rec.kind === "derived") buildHandles(rec, ctorName);
+        if (rec.kind === "signal" || rec.kind === "derived" || rec.kind === "local") buildHandles(rec, ctorName);
         if (rec.kind === "signal") signals.push(rec);
+        else if (rec.kind === "local") locals.push(rec);
         else if (rec.kind === "derived") deriveds.push(rec);
         else if (rec.kind === "effect") effects.push(rec);
         // batched recs join byKey only (no node) for reg resolution + diagnostics.
@@ -943,6 +1136,7 @@ function claimPlan(C, ctorName, registry) {
         ctorName,
         reg,
         signals: Object.freeze(signals),
+        locals: Object.freeze(locals),
         deriveds: Object.freeze(deriveds),
         effects: Object.freeze(effects),
         byKey,
@@ -1041,6 +1235,13 @@ function wireInstance(inst, plan) {
             const r = sigs[i];
             if (r.initFn !== null) inst[r.slot] = reg.signalBox(r.initFn(inst), r.opts);
         }
+        // Buildless locals: seed box + seen in spec order BEFORE the anchor.
+        // Decorator locals already exist from field-init time (initFn === null).
+        const locs = plan.locals;
+        for (let i = 0; i < locs.length; i++) {
+            const r = locs[i];
+            if (r.initFn !== null) seedLocal(inst, r, reg, r.hasInitial, r.initFn(inst));
+        }
         let a;
         reg.createRoot(() => { reg.effect(() => { a = reg.getOwner(); }); });   // R-A anchor
         inst[ANCHOR] = a;
@@ -1090,6 +1291,16 @@ function disposeCore(inst, plan) {             // assumes not already disposed
         if (box !== undefined && box[NONLIVE] === undefined) reg.dispose(box);
         inst[r.slot] = r.poison;
     }
+    // S8: locals dispose exactly like signals -- dispose the box, poison the box
+    // slot (a touch throws the named ReactiveDisposedError, 0014 dispose lattice).
+    // The seen slot is a plain field; it is left as-is (the poisoned box guards it).
+    const locs = plan.locals;
+    for (let i = 0; i < locs.length; i++) {
+        const r = locs[i];
+        const box = inst[r.slot];
+        if (box !== undefined && box[NONLIVE] === undefined) reg.dispose(box);
+        inst[r.slot] = r.poison;
+    }
     const ders = plan.deriveds;
     for (let i = 0; i < ders.length; i++) {
         const r = ders[i];
@@ -1113,6 +1324,17 @@ function applyReactiveHost(C, ctx, registry) {
     // PD-4: prewired proto slots -- named errors before wiring, shadowed after.
     for (let i = 0; i < plan.signals.length; i++) {
         const r = plan.signals[i];
+        Object.defineProperty(C.prototype, r.slot, {
+            value: r.prewired,
+            writable: true,
+            configurable: true,
+            enumerable: false,
+        });
+    }
+    // S8: a local's box slot gets the same prewired guard (the seen slot is a
+    // plain field, undefined until init -- no proto guard needed).
+    for (let i = 0; i < plan.locals.length; i++) {
+        const r = plan.locals[i];
         Object.defineProperty(C.prototype, r.slot, {
             value: r.prewired,
             writable: true,
@@ -1261,6 +1483,38 @@ function normalizeSignals(spec, recs) {
     }
 }
 
+// S8/PD-57: the buildless `locals` section -- { key: { source, equals?, initial? } }.
+// Fail closed on a missing/non-fn source (a local without a source is meaningless).
+// An `initial` present selects the @trackedReset flavor; absent, the @localCopy
+// flavor (initFn returns undefined, hasInitial false -> seedLocal reads upstream).
+function normalizeLocalEntry(key, entry) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throwLocalSourceNotFn(key);
+    const dkeys = Reflect.ownKeys(entry);
+    for (let i = 0; i < dkeys.length; i++) {
+        const dk = dkeys[i];
+        if (dk !== "source" && dk !== "equals" && dk !== "initial") throwUnknownLocalDescKey(key, dk);
+    }
+    const source = entry.source;
+    if (typeof source !== "function") throwLocalSourceNotFn(key);
+    const opts = normalizeEquals(entry, `defineReactive local ${keyLabel(key)}`);
+    const hasInitial = Object.prototype.hasOwnProperty.call(entry, "initial");
+    const initial = hasInitial ? entry.initial : undefined;
+    const initFn = function () { return initial; };
+    const slot = Symbol(typeof key === "symbol" ? "local" : "local:" + String(key));
+    const seenSlot = Symbol(typeof key === "symbol" ? "local:seen" : "local:" + String(key) + ":seen");
+    return makeLocalRec(key, slot, seenSlot, source, opts, initFn, hasInitial);
+}
+
+function normalizeLocals(spec, recs) {
+    const l = spec.locals;
+    if (l === undefined) return;
+    if (l === null || typeof l !== "object" || Array.isArray(l)) throwSpecLocals();
+    const keys = Reflect.ownKeys(l);
+    for (let i = 0; i < keys.length; i++) {
+        recs.push(normalizeLocalEntry(keys[i], l[keys[i]]));
+    }
+}
+
 function makeDerivedRec(key, fn, opts) {
     const slot = Symbol(typeof key === "symbol" ? "derived" : "derived:" + String(key));
     return {
@@ -1354,6 +1608,13 @@ function installRec(rec, proto) {
             enumerable: true,
             configurable: true,
         });
+    } else if (rec.kind === "local") {
+        Object.defineProperty(proto, rec.key, {
+            get: rec.get,
+            set: rec.set,
+            enumerable: true,
+            configurable: true,
+        });
     } else if (rec.kind === "derived") {
         Object.defineProperty(proto, rec.key, {
             get: rec.get,
@@ -1382,13 +1643,14 @@ export function defineReactive(Class, spec) {
     const sections = Reflect.ownKeys(spec);
     for (let i = 0; i < sections.length; i++) {
         const k = sections[i];
-        if (k !== "signals" && k !== "deriveds" && k !== "effects" && k !== "host") {
+        if (k !== "signals" && k !== "locals" && k !== "deriveds" && k !== "effects" && k !== "host") {
             throwUnknownSection(k);
         }
     }
 
     const recs = [];
     normalizeSignals(spec, recs);              // signals first (spec/wire order)
+    normalizeLocals(spec, recs);               // locals second (PD-57)
     normalizeDeriveds(spec, recs);
     normalizeEffects(spec, recs);
     const registry = validateHostOptions(spec.host);   // shared PD-11 validation
@@ -1487,6 +1749,16 @@ function releaseCore(inst, plan) {             // assumes a LIVE instance
         if (box !== undefined && box[NONLIVE] === undefined) reg.dispose(box);
         inst[r.slot] = r.parked;
     }
+    // S8: a parked local releases its box node (swap the box slot to the parked
+    // handle) but RETAINS the seen slot as a plain record field (0014 park lattice);
+    // reinit re-creates the box and resets both (PD-58).
+    const locs = plan.locals;
+    for (let i = 0; i < locs.length; i++) {
+        const r = locs[i];
+        const box = inst[r.slot];
+        if (box !== undefined && box[NONLIVE] === undefined) reg.dispose(box);
+        inst[r.slot] = r.parked;
+    }
     const ders = plan.deriveds;
     for (let i = 0; i < ders.length; i++) {
         inst[ders[i].slot] = ders[i].parked;   // cboxes already cascaded
@@ -1562,7 +1834,10 @@ export function reinitReactive(vm, initials) {
         const ikeys = Reflect.ownKeys(initials);
         for (let i = 0; i < ikeys.length; i++) {
             const rec = plan.byKey.get(ikeys[i]);
-            if (rec === undefined || rec.kind !== "signal") throwReinitInitialsKey(plan.ctorName, ikeys[i], plan);
+            // PD-58: initials[] accepts @reactive signal keys AND @localTo keys.
+            if (rec === undefined || (rec.kind !== "signal" && rec.kind !== "local")) {
+                throwReinitInitialsKey(plan.ctorName, ikeys[i], plan);
+            }
         }
     }
     const reg = plan.reg;
@@ -1584,6 +1859,30 @@ export function reinitReactive(vm, initials) {
                 v = SIG_INITIAL.get(r);
             }
             vm[r.slot] = reg.signalBox(v, r.opts);
+        }
+        // PD-58: each local resets its box -> initial AND its seen slot -> the
+        // CURRENT upstream (seedLocal reads source untracked). Precedence mirrors
+        // the signal loop: caller override, then the buildless plan initFn (with its
+        // hasInitial flag), then the decorator field-initial captured in
+        // makeLocalInit (undefined -> the @localCopy flavor: reseed the box from
+        // the current upstream). Locals rebuild BEFORE buildGraph so deriveds/effects
+        // see them on the first synchronous run (D-4a), same as construction.
+        const locs = plan.locals;
+        for (let i = 0; i < locs.length; i++) {
+            const r = locs[i];
+            let hasInitial;
+            let v;
+            if (initials !== undefined && Object.prototype.hasOwnProperty.call(initials, r.key)) {
+                hasInitial = true;
+                v = initials[r.key];
+            } else if (r.initFn !== null) {
+                hasInitial = r.hasInitial;
+                v = r.initFn(vm);
+            } else {
+                v = LOCAL_INITIAL.get(r);
+                hasInitial = v !== undefined;
+            }
+            seedLocal(vm, r, reg, hasInitial, v);
         }
         buildGraph(vm, plan, closures);
     } catch (e) {
@@ -1656,7 +1955,7 @@ function throwCostInconclusive(name, a, b) {
 
 function throwCostNodeMismatch(name, got, want) {
     throw new Error(
-        `${ERR}costOf(${name}) -- probed node count ${got} != P+D+E+1 (${want}); the bound registry was not quiet during the probe.`,
+        `${ERR}costOf(${name}) -- probed node count ${got} != P+L+D+E+1 (${want}); the bound registry was not quiet during the probe.`,
     );
 }
 
@@ -1688,9 +1987,9 @@ function probeCost(Factory, plan, reg) {
  * Measure the settled per-instance cost of a reactive class on its bound
  * registry: construct, read every `@derived` once (forcing the lazy links),
  * snapshot, dispose, verify the floor -- twice, requiring identical deltas.
- * Returns a frozen `{ nodes, links, signals, deriveds, effects }`; `nodes`
- * equals P+D+E+1. Cached per class. Throws (never guesses) on an inconclusive
- * or polluted probe. Constructs the probe instance with no arguments.
+ * Returns a frozen `{ nodes, links, signals, locals, deriveds, effects }`;
+ * `nodes` equals P+L+D+E+1. Cached per class. Throws (never guesses) on an
+ * inconclusive or polluted probe. Constructs the probe instance with no arguments.
  */
 export function costOf(Factory) {
     if (typeof Factory !== "function") throwCostFactory();
@@ -1709,14 +2008,18 @@ export function costOf(Factory) {
         throwCostInconclusive(plan.ctorName, first, second);
     }
     const sig = plan.signals.length;
+    const loc = plan.locals.length;
     const der = plan.deriveds.length;
     const eff = plan.effects.length;
-    const expected = sig + der + eff + 1;
+    // S8: each @localTo member is exactly 1 box node (its seen slot is a plain
+    // field, 0 nodes), so the node formula is P + L + D + E + 1 (0014 cost law).
+    const expected = sig + loc + der + eff + 1;
     if (first.nodes !== expected) throwCostNodeMismatch(plan.ctorName, first.nodes, expected);
     const result = Object.freeze({
         nodes: first.nodes,
         links: first.links,
         signals: sig,
+        locals: loc,
         deriveds: der,
         effects: eff,
     });
@@ -1820,11 +2123,13 @@ function labelStringsFor(plan) {
     const name = plan.ctorName;
     const sig = [];
     for (let i = 0; i < plan.signals.length; i++) sig.push(`${name}.${keyLabel(plan.signals[i].key)}`);
+    const loc = [];
+    for (let i = 0; i < plan.locals.length; i++) loc.push(`${name}.${keyLabel(plan.locals[i].key)}`);
     const der = [];
     for (let i = 0; i < plan.deriveds.length; i++) der.push(`${name}.${keyLabel(plan.deriveds[i].key)}`);
     const eff = [];
     for (let i = 0; i < plan.effects.length; i++) eff.push(`${name}#${keyLabel(plan.effects[i].key)}`);
-    s = { anchor: `${name}@anchor`, signals: sig, deriveds: der, effects: eff };
+    s = { anchor: `${name}@anchor`, signals: sig, locals: loc, deriveds: der, effects: eff };
     LABEL_STRINGS.set(plan, s);
     return s;
 }
@@ -1843,6 +2148,11 @@ function registerLabels(inst, plan, reg, effHandles) {
     for (let i = 0; i < sigs.length; i++) {
         const id = reg.nodeId(inst[sigs[i].slot]);
         if (id !== undefined) { map.set(id, strings.signals[i]); ids.push(id); }
+    }
+    const locs = plan.locals;
+    for (let i = 0; i < locs.length; i++) {
+        const id = reg.nodeId(inst[locs[i].slot]);
+        if (id !== undefined) { map.set(id, strings.locals[i]); ids.push(id); }
     }
     const ders = plan.deriveds;
     for (let i = 0; i < ders.length; i++) {
@@ -1944,4 +2254,4 @@ export function auditReactive(on) {
 // --- Version ------------------------------------------------------------------
 
 /** Package version. Kept in lockstep with package.json and llms.txt. */
-export const VERSION = "1.1.1";
+export const VERSION = "1.2.0";

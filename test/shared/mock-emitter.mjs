@@ -331,5 +331,30 @@ export function makeClasses(pkg) {
         members: [],
     });
 
-    return { Counter, Base, Derived, Leaf, SYM, recompute, effectFires, pkg };
+    // @localTo family (0014): src is the upstream signal; draft carries an
+    // initializer (starts 0, resets to src on the first upstream move -- the
+    // @trackedReset flavor); mirror has no initializer (follows src from wiring --
+    // the @localCopy flavor). P=1 + L=2 + 1 anchor = 4 nodes.
+    const Locals = buildClass({
+        name: "Locals",
+        classDecorator: pkg.reactiveHost,
+        members: [
+            { kind: "accessor", key: "src", decorator: pkg.reactive, value: () => 10 },
+            {
+                kind: "accessor",
+                key: "draft",
+                decorator: pkg.localTo((self) => self.src),
+                value: () => 0,
+            },
+            {
+                // No `value` thunk -> the emitted initializer is undefined -> the
+                // @localCopy flavor (initial seeded from the upstream at wiring).
+                kind: "accessor",
+                key: "mirror",
+                decorator: pkg.localTo((self) => self.src),
+            },
+        ],
+    });
+
+    return { Counter, Base, Derived, Leaf, Locals, SYM, recompute, effectFires, pkg };
 }

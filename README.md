@@ -15,7 +15,7 @@
 > view-model with a measured per-property cost, one deterministic teardown, and
 > poison-on-dispose safety -- built on @zakkster/lite-signal.
 
-**`@reactive accessor` fields, `@derived` getters, `@reactiveEffect` methods, `@batched` actions, one `@reactiveHost` wiring site -- and `disposeReactive()` tears the whole instance down in one call, every time, with nothing left dangling. A decorated read costs ~1.0x a hand-written instance-field signal read. An instance costs exactly P + D + E + 1 pool nodes and gives all of them back on dispose. A buildless twin, `defineReactive()`, delivers the identical feature set with zero transpiler.**
+**`@reactive accessor` fields, `@derived` getters, `@reactiveEffect` methods, `@batched` actions, one `@reactiveHost` wiring site -- and `disposeReactive()` tears the whole instance down in one call, every time, with nothing left dangling. A decorated read costs ~1.0x a hand-written instance-field signal read. An instance costs exactly P + L + D + E + 1 pool nodes and gives all of them back on dispose. A buildless twin, `defineReactive()`, delivers the identical feature set with zero transpiler.**
 
 ```js
 import { reactive, derived, reactiveHost, disposeReactive } from "@zakkster/lite-signal-decorators";
@@ -100,7 +100,7 @@ class Player {
   }
 }
 
-const p = new Player();  // exactly 2 + 2 + 1 + 1 = 6 pool nodes (P + D + E + 1)
+const p = new Player();  // exactly 2 + 0 + 2 + 1 + 1 = 6 pool nodes (P + L + D + E + 1)
 p.hit(80);               // shield 0, hp 70 -> status still "healthy": effect does NOT re-run
 p.hit(20);               // hp 50 -> "critical": effect runs once
 disposeReactive(p);      // effect stopped, deriveds + boxes disposed, slots poisoned
@@ -138,6 +138,7 @@ const ReactivePlayer = defineReactive(Player, {
 
 - **`@reactive accessor x = v`** -- a per-instance signal box in a unique symbol slot. The read body is one slot load + one monomorphic box call: zero branches, zero allocation.
 - **`@derived get y()`** -- a lazy computed owned by the instance's anchor, with optional custom `equals` for change-cutoff.
+- **`@localTo(source) accessor x = v`** -- upstream-keyed resettable local state: reads follow `source(self)` until you write, a write overrides, and a changed upstream resets it -- glitch-free by compare-on-read, no effect, no extra tick. With an initializer the field starts there and resets on the first upstream move; without one it follows upstream from wiring. One signal box + one plain seen-slot per member; the read is pure, so it is legal inside any `@derived`.
 - **`@reactiveEffect m()`** -- a method that auto-runs as an effect after wiring. Manual calls are leak-guarded (a call inside a foreign tracking scope is untracked, so it records zero stray dependencies) and identity-guarded (a foreign receiver throws by name instead of running against garbage).
 - **`@batched m()`** -- the method body inside one engine batch: N writes, one flush. Action-grade by design, with a measured per-call cost -- not a per-frame path.
 - **`@reactiveHost`** -- the single wiring site. Its most-derived constructor builds the anchor, every derived, and every effect exactly once, after all fields of all classes in the chain initialize. `@reactiveHost({ registry })` binds the whole chain to an isolated lite-signal registry.
@@ -205,7 +206,7 @@ The failure mode this package is built against is not "reactivity doesn't work" 
 
 ### Member decorators
 
-All four take a bare form and a factory form (`@reactive` and `@reactive({...})` both work).
+The first four take a bare form and a factory form (`@reactive` and `@reactive({...})` both work); `@localTo` is the exception -- it always takes a required `source` argument (detailed below the table).
 
 | Decorator | Placement | Options | Behavior |
 |---|---|---|---|
@@ -213,6 +214,24 @@ All four take a bare form and a factory form (`@reactive` and `@reactive({...})`
 | `@derived` | `get y()` | `equals(a, b)` | Lazy computed owned by the anchor. Recomputes on dependency change; `equals` cuts propagation when the result is unchanged. |
 | `@reactiveEffect` | `m()` | `scheduler(run)` | Auto-runs as an effect at wiring, re-runs on tracked changes. `scheduler` defers re-runs (frame coalescing etc.). Manual calls: leak-guarded + identity-guarded. |
 | `@batched` | `m()` | -- | Runs the body inside one engine batch: all writes flush once, at close. Nesting flushes at the outermost close. Action-grade -- see [the numbers](#the-numbers). |
+| `@localTo` | `accessor x = v` | `equals(a, b)` | Upstream-keyed resettable local state. Read follows `source(self)` until written, a write overrides, a changed upstream resets. Compare-on-read (pure); `equals` governs the upstream compare only. Takes a REQUIRED `source` argument -- see below. |
+
+### `localTo(source, { equals? }?)`
+
+`@localTo(source)` declares a field that **follows an upstream value until someone writes it, then resets when upstream changes** -- the "local copy you can edit, that re-syncs on a real update" pattern, done glitch-free with no effect and no extra tick. `source` is a REQUIRED tracked `(self) => value` function, read inline on every get (no extra node). The get is **pure** -- it compares `source(self)` to a per-instance last-seen slot and returns the local box when upstream is unchanged, else the upstream value; it never writes a box, so a `@localTo` read is legal inside any `@derived`. A write always overrides (the write path never compares). `{ equals }` (default `Object.is`) governs the **upstream** compare only.
+
+Two field flavors, selected by the natural syntax (the [initial-value unification rule](decisions/0014-localto-contract.md)):
+
+```js
+@reactiveHost
+class Field {
+  @reactive accessor upstream = "server";
+  @localTo((self) => self.upstream) accessor draft;        // no initial: FOLLOWS upstream from wiring
+  @localTo((self) => self.upstream) accessor pinned = "";  // initial: STARTS "", resets on first upstream move
+}
+```
+
+**The ABA contract (honest, shipped, never softened).** The upstream compare is VALUE-based -- lite-signal exposes no public revision counter, and reaching for a private one would be impure. So the reset triggers when upstream *changes relative to the last adoption*, not when it has moved transitively: upstream `A` -> local write `X` -> upstream `B` -> upstream back to an equals-`A` value leaves the read showing the **stale local `X`**. tracked-toolbox's `@localCopy` has the same property. A coarse custom `equals` widens override survival on purpose. See the [compare-on-read design bullet](#design-decisions-worth-knowing).
 
 ### Class decorator
 
@@ -229,6 +248,7 @@ The buildless twin. Installs the members on `Class.prototype`, wraps the class t
 |---|---|---|
 | `signals` | `["a", "b"]` or `{ key: value \| { initial \| init \| equals } }` | A plain non-function value is the initial. `initial` is taken verbatim; `init(self)` computes per instance; a bare function is a named throw (ambiguous -- wrap it). |
 | `deriveds` | `{ key: (self) => value \| { get, equals } }` | |
+| `locals` | `{ key: { source, equals?, initial? } }` | Map only. The buildless twin of `@localTo`. `source` REQUIRED and a `(self) => value` fn (missing/non-fn is a named throw); `equals` governs the upstream compare; `initial` (verbatim) selects the reset-from flavor, its absence the follow-from-wiring flavor. |
 | `effects` | `{ key: (self) => void \| { run, scheduler } }` | Map only. |
 | `host` | `{ registry }` or omitted | Same validation as `@reactiveHost`. |
 
@@ -248,7 +268,7 @@ Symbol keys work (`Reflect.ownKeys`). A spec key colliding with an own property 
 
 | Export | Signature | Behavior |
 |---|---|---|
-| `costOf` | `(Factory) => { nodes, links, signals, deriveds, effects }` | The measured, settled per-instance cost, probed on the class's bound registry (frozen result, cached per class). Double-probed: an inconclusive or polluted probe THROWS -- never a guess. `nodes` is exactly P + D + E + 1; `links` is the first-full-read link count. |
+| `costOf` | `(Factory) => { nodes, links, signals, deriveds, effects }` | The measured, settled per-instance cost, probed on the class's bound registry (frozen result, cached per class). Double-probed: an inconclusive or polluted probe THROWS -- never a guess. `nodes` is exactly P + L + D + E + 1; `links` is the first-full-read link count. |
 | `capacityFor` | `(inventory, { headroom }?) => RegistryConfig` | Sizes a `createRegistry` config from `[Factory, count]` pairs: nodes exact, links x `headroom` (floored at the engine minimum of 1), `prealloc: "eager"`, `onCapacityExceeded: "throw"`. Fail-closed inventory and options validation. Link policy + caveats: [decisions/0007](decisions/0007-capacity-policy.md). |
 | `enableLabels` / `labelOf` | `(on)` / `(idOrHandle, registry?) => string \| undefined` | Opt-in devtools identity (default OFF): while on, wiring registers per-registry `nodeId -> "Class.prop"` / `"Class#method"` / `"Class@anchor"`; dispose unregisters. `labelOf` misses return `undefined`, never throw. |
 | `auditReactive` | `(on)` | Opt-in leak auditor (default OFF): a lazily-created `FinalizationRegistry` reports any instance collected WITHOUT `disposeReactive`, naming class and shape. Holds no instance references itself; zero cost and zero registrations while off. |
@@ -260,7 +280,7 @@ With labels and audit off, the zero-GC budgets are byte-identical to 0.3.0 -- th
 | Export | Value |
 |---|---|
 | `ReactiveDisposedError` | `extends Error`; `name: "ReactiveDisposedError"`; fields `className`, `key`. Thrown on ANY touch of a disposed instance's surface. |
-| `VERSION` | `"1.1.1"` |
+| `VERSION` | `"1.2.0"` |
 
 ### The rejection matrix
 
@@ -349,6 +369,8 @@ The fair baseline for a decorated property is a hand-written instance field (`th
 
 A decorated reactive property costs **~1.0x a hand-written instance-field signal read**; both are ~2x a module-level signal because that is the cost of per-instance storage, paid either way -- an engine indirection, not a decorator tax. Writes are ~2.5-3x a module-const read across all instance layouts (box `.set` propagation dominates; inherent to any reactive write). The rejected dictionary layout is the one that *degrades at fleet scale* (cross-instance IC megamorphism) -- the hazard only a class-shaped benchmark exposes, and the reason this package doesn't use one.
 
+A `@localTo` read measures **1.69x** a plain decorated read -- two tracked reads (upstream `source` + the local box) plus a value compare, versus the one box read of `@reactive` -- and it pays that cost with **0.000 B/op** under the read/write storms (`gc.major 0`, observed `maxPauseMs` 0.07-0.08 against the 4.0 gate); the compare-on-read is honest arithmetic, not free.
+
 ### `@batched` per call (`spikes/batched-cost.mjs`)
 
 | Path | ns/op |
@@ -361,7 +383,7 @@ The ~7 ns over raw batch is the guarded thunk + rest-array the decorator allocat
 
 ### Per instance
 
-`P + D + E + 1` pool nodes -- one per signal, per derived, per effect, plus the anchor. All of them return to the pool on dispose: conservation is node-exact (`activeNodes` to baseline, zero pool growths, allocations minus disposals reconciled) over 4096-cycle churn and a wall-clock soak.
+`P + L + D + E + 1` pool nodes -- one per signal, per local, per derived, per effect, plus the anchor. All of them return to the pool on dispose: conservation is node-exact (`activeNodes` to baseline, zero pool growths, allocations minus disposals reconciled) over 4096-cycle churn and a wall-clock soak.
 
 <details>
 <summary><strong>Zero-GC design notes: the allocation table + the gates</strong></summary>
@@ -373,15 +395,15 @@ The ~7 ns over raw batch is the guarded thunk + rest-array the decorator allocat
 | `@derived get` read | none | lazy computed read |
 | Effect re-run | none retained | gated: zero major GC across the read/write torture lanes |
 | `@batched m()` call | 1 thunk + 1 rest array | the documented, measured exception (+7 ns vs raw batch); action-grade only |
-| `new Host()` | P + D + E + 1 pool nodes | plus the instance itself; nodes recycle on dispose (F-0 conservation) |
+| `new Host()` | P + L + D + E + 1 pool nodes | plus the instance itself; nodes recycle on dispose (F-0 conservation) |
 | `disposeReactive(vm)` | none | allocation-free success path; poison handles are prebuilt per member at decoration time |
 | `boxOf` / `rootOf` / any throw | cold path | introspection and failure paths may allocate; never on the hot path |
 
-The gates that hold it (run on every change, all green at 1.1.1):
+The gates that hold it (run on every change, all green at 1.2.0):
 
-- `npm test` / `npm run test:gc` -- **257/257** on both lanes.
+- `npm test` / `npm run test:gc` -- **291/291** on both lanes.
 - Suite gate (lite-leak + lite-gc-profiler): `leak=size 0/0 findings=0 warnings=0 | gc major=0 minor=0 maxMs=0.00 | ok`.
-- Torture: **16 scenarios** (zero-GC read/write lanes at `maxMajor 0, maxPauseMs 4`; 4096-cycle leak gate at 0 live / 0 findings / 0 warnings; capacity atomicity at every overflow point; a 300-seed x 20k-op oracle with zero divergences; the `reinit-torture` acquire/release gate) -- **14 run + 2 that skip correctly below their peer floors** (`scope-adoption` needs 1.6.0, `using-dispose` needs 1.9.0; the installed peer is 1.5.0). A skip *below* a floor is the forward-compat design working; a skip *at or above* it is a FAIL (run.mjs enforces floor-escalation). Every scenario carries a `TORTURE_BREAK` sabotage control that must exit non-zero -- **16/16 controls** prove each gate can actually fail.
+- Torture: **17 scenarios** (zero-GC read/write lanes at `maxMajor 0, maxPauseMs 4`; 4096-cycle leak gate at 0 live / 0 findings / 0 warnings; capacity atomicity at every overflow point; a 300-seed x 20k-op oracle with zero divergences; the `reinit-torture` acquire/release gate; the `localto-torture` zero-alloc read/write storm + ABA-stale interleave lattice + pooled park/reinit) -- **15 run + 2 that skip correctly below their peer floors** (`scope-adoption` needs 1.6.0, `using-dispose` needs 1.9.0; the installed peer is 1.5.0). A skip *below* a floor is the forward-compat design working; a skip *at or above* it is a FAIL (run.mjs enforces floor-escalation). Every scenario carries a `TORTURE_BREAK` sabotage control that must exit non-zero -- **17/17 controls** prove each gate can actually fail.
 - `churn-soak` + `fleet-soak`: sustained construct/use/dispose and a 10s 2k-VM fleet tick; pools at floor and retained heap flat at every sample.
 
 The cross-framework matrix lives in `bench/` (private, never shipped): six engines -- both our tiers, the hand-written `lite-raw-boxes` baseline, MobX 7, signal-utils/signal-polyfill, and a hand-rolled alien-signals class -- across eight class-shaped scenarios (including the `churn-reuse` acquire/release lane, where the lite tiers pool with zero retained growth and MobX/signal-utils/alien-class are structurally `unsupported` -- no disposable instance lifecycle to pool), checksum-verified for identical work, stamped into `bench/results.txt`. The formal verdicts are in [`decisions/0006-kill-criteria.md`](decisions/0006-kill-criteria.md): the decorated path measured **0.94x** the hand-written baseline on vm-write and **1.10x** on a 10k-instance fleet read (the 2.0x kill line cleared with margin), and **0 major + 0 minor GC over 4096 construct/use/dispose cycles** with pools at floor -- while emitting ~12.6x less transient garbage per churn run than the hand-rolled class it replaces.
@@ -406,18 +428,19 @@ Full rationale lives in [`decisions/`](decisions/) -- each is a numbered, dated 
 - **Symbol-slot storage.** Chosen over the emitter's private backing (emitter-dependent codegen) and a dict (fleet megamorphism, measured) -- and it is the same mechanism poison uses, so storage, dispose, and poison are one design.
 - **Statics and `#` privates are rejected, not half-supported.** A module-level signal belongs to raw lite-signal; a private member can't be reached by the wiring protocol -- both are named decoration-time throws.
 - **Pooled reinit is an identity-stable arena tool, not a speed shortcut (1.1.0).** `releaseReactive(vm)` parks a live instance to the engine pool and `reinitReactive(vm, initials?)` revives it -- a three-state lattice (live / parked / disposed) over the same instance, so consumers keep the object reference across turnover. It holds its gate: over 4096 acquire/release cycles at the churn shape (P=4, D=2, E=1) it measures **0 major GC**, retained delta-heap **at or below the in-process zero-alloc control**, and exact pool conservation (`activeNodes` back to baseline, zero pool growths, a parked instance holding 0 engine nodes). The honest throughput number, same shape, 2026-08-30 stamp (module 1.1.0): plain construct/dispose CHURN is *faster* -- **1323K ops/s** vs reuse's **1159K** -- because construction is already allocation-light and pool-conserving, so reinit is not a per-op win. Reach for it when you need identity-stable pooled instances under sustained turnover with zero retained growth (an arena/fleet primitive), not when you want raw op speed. MobX has no equivalent lifecycle at all: its instances are never disposable, so there is no release/reinit cycle to pool ([decisions/0010](decisions/0010-reinit-contract.md), [0011](decisions/0011-reinit-api.md)).
+- **`@localTo` resets by compare-on-read, and its ABA limit is stated, not hidden (1.2.0).** The reset is decided *on the read* -- `source(self)` compared to a per-instance last-seen slot -- so it is glitch-free, synchronous, and pure (no box write on read, legal inside a `@derived`). The rejected alternative was an effect that watches upstream and clears the local: PD-51 measured that recipe clobbering a user's write one tick late, which is the whole reason the feature lives in-package instead of a cookbook recipe. Because the compare is value-based (lite-signal exposes no public revision counter and a private one would be impure), the honest limit is ABA: upstream `A` -> local write -> upstream `B` -> upstream back to an equals-`A` value shows the stale local -- the same property tracked-toolbox's `@localCopy` ships, documented rather than papered over ([decisions/0013](decisions/0013-strategic-admission-track.md), [0014](decisions/0014-localto-contract.md)).
 
 ---
 
 ## Testing (for clients & QA)
 
 ```bash
-npm test            # node --test, 257 tests
-npm run test:gc     # the same 257 with --expose-gc (enables the allocation assertions)
+npm test            # node --test, 291 tests
+npm run test:gc     # the same 291 with --expose-gc (enables the allocation assertions)
 npm run gate        # the full pre-publish chain (section 10): fixtures -> test -> test:gc -> torture -> controls -> peer-preview (non-blocking) -> bench selftest -> cookbook -> pack
 ```
 
-**257 tests** across sixteen files, all green at 1.1.1. The decorator protocol is tested three times over: against a mock standard-decorators emitter *and* against committed real TypeScript 5 and Babel `2023-11` emits, so both toolchains' codegen is pinned, not assumed.
+**291 tests** across seventeen files, all green at 1.2.0. The decorator protocol is tested three times over: against a mock standard-decorators emitter *and* against committed real TypeScript 5 and Babel `2023-11` emits, so both toolchains' codegen is pinned, not assumed.
 
 | File | Tests | Covers |
 |---|---:|---|
@@ -435,8 +458,9 @@ npm run gate        # the full pre-publish chain (section 10): fixtures -> test 
 | `12-accounting` | 11 | `costOf` node/link/shape grid (double-probe, frozen + cached, fail-closed) + `capacityFor` budget sizing |
 | `13-labels-audit` | 10 | `enableLabels`/`labelOf` per-registry identity + `auditReactive` leak reporting, both opt-in and default-OFF |
 | `14-qa-s4-boundary` | 21 | S4 adversarial edges: stats-less facade closure, signals-only capacity floor, label/audit boundary matrix |
-| `15-cookbook` | 14 | [`COOKBOOK.md`](https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md) drift/parity: each fenced block byte-compared against its tagged companion `#region` (both directions + both-way coverage), surface freeze (exactly 18 exports), citation allowlist, link law, static-cost probe |
+| `15-cookbook` | 14 | [`COOKBOOK.md`](https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md) drift/parity: each fenced block byte-compared against its tagged companion `#region` (both directions + both-way coverage), surface freeze (exactly 19 exports), citation allowlist, link law, static-cost probe |
 | `16-reinit` | 29 | Pooled-reinit lattice on both emit lanes: park/reinit/dispose transitions, the five `reinitReactive` fail-closed states, parked-touch throws by name, `initials` boundary matrix (0..N+1 keys, null/undefined, NaN/-0 verbatim), `Symbol.dispose` on a parked instance, accessor descriptors byte-identical across reinit, self-release re-entrancy, ledger conservation |
+| `17-localto` | 34 | `@localTo` on both emit lanes + buildless `locals`: the read/write/upstream-reset lattice, both initial flavors (follow-from-wiring vs reset-from-initial), the ABA stale-local contract, `equals` override survival, park/reinit box+seen reset, `costOf` = P+L+D+E+1, source-throw fail-closed, and the fail-closed option/source matrix |
 
 ### Emit-support matrix
 
@@ -447,14 +471,14 @@ Generated by `node test/fixtures/emit-matrix.mjs` from `test/fixtures/hashes.jso
 
 | Source | Emitter | Emit lane | Compiled output | sha256 | At decoration time |
 |---|---|---|---|---|---|
-| `fixture.src.ts` | TypeScript 5 | standard 2023-11 | `ts-out/fixture.src.js` | `1a3fc0f943bf` | accepted -- full decorator surface wired + pinned green |
-| `fixture.src.ts` | Babel | standard 2023-11 | `babel-out/fixture.src.js` | `eb9dfb5939b1` | accepted -- full decorator surface wired + pinned green |
+| `fixture.src.ts` | TypeScript 5 | standard 2023-11 | `ts-out/fixture.src.js` | `5d6837710b34` | accepted -- full decorator surface wired + pinned green |
+| `fixture.src.ts` | Babel | standard 2023-11 | `babel-out/fixture.src.js` | `f7d8b3e5ed19` | accepted -- full decorator surface wired + pinned green |
 | `static.src.ts` | TypeScript 5 | standard 2023-11 | `ts-out/static.src.js` | `d2a03e3d5f70` | rejected -- static member is a named throw at decoration time |
 | `static.src.ts` | Babel | standard 2023-11 | `babel-out/static.src.js` | `dc936c5aa235` | rejected -- static member is a named throw at decoration time |
 | `legacy.src.ts` | TypeScript 5 | legacy (experimental) | `ts-legacy-out/legacy.src.js` | `c1059b1d37b1` | rejected -- legacy emit -> named rejection at decoration time |
 | `legacy.src.ts` | Babel | legacy (experimental) | `babel-legacy-out/legacy.src.js` | `1d35a02c57ce` | rejected -- legacy emit -> named rejection at decoration time |
 
-Source hashes: `fixture.src.ts` `fb492a396340`, `static.src.ts` `81fb649965e6`, `legacy.src.ts` `30ac3dabaf7c`.
+Source hashes: `fixture.src.ts` `339c40148a70`, `static.src.ts` `81fb649965e6`, `legacy.src.ts` `30ac3dabaf7c`.
 <!-- EMIT-MATRIX:END -->
 
 ### The torture suite (dev-side, never shipped)
@@ -462,13 +486,13 @@ Source hashes: `fixture.src.ts` `fb492a396340`, `static.src.ts` `81fb649965e6`, 
 Process-isolated stress scenarios built on `@zakkster/lite-leak` + `@zakkster/lite-gc-profiler`:
 
 ```bash
-npm run torture             # all 16 scenarios (14 run + 2 floor-gated skips)
+npm run torture             # all 17 scenarios (15 run + 2 floor-gated skips)
 npm run torture:semantic    # the correctness lane (CI)
 npm run torture:soak        # the wall-clock churn + fleet soaks
 npm run torture:controls    # sabotage self-test: every scenario must FAIL when broken
 ```
 
-Sixteen scenarios: emit-matrix, ordering, lifecycle, pool-conservation, zero-GC lanes, capacity atomicity (every overflow point x both construction paths), the full disposed-poison surface + resurrection storms, a 4096-cycle lite-leak gate, a **300-seed x 20k-op oracle fuzzer** (decorated vs hand-wired raw twin in lockstep: every derived value, every effect fire count, every graph opcode tally), raw/decorated interop + cross-registry + `registry.destroy()` contracts, batch/untrack semantics, the `reinit-torture` acquire/release gate (4096 pooled cycles: `maxMajor 0`, retained delta-heap at/below the in-process zero-alloc control, exact pool conservation), the wall-clock churn soak, and a 10s 2k-VM fleet soak -- plus two forward-compat scenarios (`scope-adoption`, `using-dispose`) that **skip correctly** while the installed peer sits below their per-feature floors (1.6.0 `createScope`, 1.9.0 `Symbol.dispose`). A skip below a floor is the design working; a skip at or above it is a FAIL. On the installed 1.5.0 peer: 14 pass, 2 skip. Every scenario carries a `TORTURE_BREAK` sabotage control that must exit non-zero -- a gate that cannot fail is not a gate. Seeded lanes replay exactly via `TORTURE_SEED`.
+Seventeen scenarios: emit-matrix, ordering, lifecycle, pool-conservation, zero-GC lanes, capacity atomicity (every overflow point x both construction paths), the full disposed-poison surface + resurrection storms, a 4096-cycle lite-leak gate, a **300-seed x 20k-op oracle fuzzer** (decorated vs hand-wired raw twin in lockstep: every derived value, every effect fire count, every graph opcode tally), raw/decorated interop + cross-registry + `registry.destroy()` contracts, batch/untrack semantics, the `reinit-torture` acquire/release gate (4096 pooled cycles: `maxMajor 0`, retained delta-heap at/below the in-process zero-alloc control, exact pool conservation), the `localto-torture` gate (zero-alloc `@localTo` read/write storm at `maxMajor 0`, the ABA-stale write/reset interleave asserted AS the shipped contract, pooled park/reinit box+seen reset, tracking-edge and pure-compute-read pins), the wall-clock churn soak, and a 10s 2k-VM fleet soak -- plus two forward-compat scenarios (`scope-adoption`, `using-dispose`) that **skip correctly** while the installed peer sits below their per-feature floors (1.6.0 `createScope`, 1.9.0 `Symbol.dispose`). A skip below a floor is the design working; a skip at or above it is a FAIL. On the installed 1.5.0 peer: 15 pass, 2 skip. Every scenario carries a `TORTURE_BREAK` sabotage control that must exit non-zero -- a gate that cannot fail is not a gate. Seeded lanes replay exactly via `TORTURE_SEED`.
 
 ### The cookbook lane (dev-side, never shipped)
 
@@ -546,7 +570,7 @@ The cross-framework numbers behind this table are stamped in [`decisions/0006-ki
 - **Not a deep/proxy observation layer.** No `observable.deep`, no wrapped Arrays/Maps/Sets, no proxy magic -- the reactive unit is a declared member, not a traversed object graph. Collections are `@zakkster/lite-project` territory.
 - **Not a per-frame action system.** `@batched` costs a measured thunk per call -- fine for "one call per user intent", wrong inside a render loop. Per-frame hot lanes stay on plain accessor writes (and frame *scheduling* belongs to `lite-raf`).
 - **Not a framework, renderer, or component model.** It ends at the reactive view-model; DOM binding is `lite-signal-dom`'s job.
-- **Not a general meta-programming kit.** Five decorators, one wiring law -- not an open decorator toolbox. It does one thing: turn a class into a reactive view-model with a provable lifetime.
+- **Not a general meta-programming kit.** Six decorators, one wiring law -- not an open decorator toolbox. It does one thing: turn a class into a reactive view-model with a provable lifetime.
 - **Not a MobX API shim.** No `makeObservable`, no administration objects -- and no GC-based cleanup: disposal is explicit, deterministic, and verified, because "the collector will get it eventually" is not a lifecycle.
 - **Not a legacy-decorators consumer.** TypeScript `experimentalDecorators` emit is detected by call shape at decoration time and rejected with a named error -- never "works differently under legacy".
 - **Not usable as `@` syntax without a toolchain** -- that is exactly what `defineReactive` exists for.
@@ -566,7 +590,7 @@ The cross-framework numbers behind this table are stamped in [`decisions/0006-ki
 
 ### The cookbook
 
-[`COOKBOOK.md`](https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md) collects eighteen composition recipes over the frozen 18-export surface -- how to build the things this package deliberately does not ship a decorator for, by composing the ones it does. Its headline is the **MobX-parity-by-composition matrix**, mapping each remaining MobX construct (`observable.array`, `observable.map`, `observable.deep`, `toJS`, `when`, `runInAction`, `observe`/`intercept`) to a decorator, a suite member, or a recipe -- extending the migration tables above to the rest of MobX with the honest note per row. It walks the **two-plane fleet** (a sim plane of arena columns written raw per frame beside a reactive plane of a handful of committed members), the reactive-collection-without-a-node-per-element pattern, and the **lite-store boundary** where document state meets class state -- stated plainly as the one path that is *not* zero-GC, and why. Every code block is byte-verified against a runnable, GC-gated companion in `cookbook/` (`npm run cookbook`), so a quoted recipe cannot drift from working code. It is delivered GitHub-only -- the installed tarball stays the lean 7-file runtime surface (decisions/0009).
+[`COOKBOOK.md`](https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md) collects eighteen composition recipes over the frozen 19-export surface -- how to build the things this package deliberately does not ship a decorator for, by composing the ones it does. Its headline is the **MobX-parity-by-composition matrix**, mapping each remaining MobX construct (`observable.array`, `observable.map`, `observable.deep`, `toJS`, `when`, `runInAction`, `observe`/`intercept`) to a decorator, a suite member, or a recipe -- extending the migration tables above to the rest of MobX with the honest note per row. It walks the **two-plane fleet** (a sim plane of arena columns written raw per frame beside a reactive plane of a handful of committed members), the reactive-collection-without-a-node-per-element pattern, and the **lite-store boundary** where document state meets class state -- stated plainly as the one path that is *not* zero-GC, and why. Every code block is byte-verified against a runnable, GC-gated companion in `cookbook/` (`npm run cookbook`), so a quoted recipe cannot drift from working code. It is delivered GitHub-only -- the installed tarball stays the lean 7-file runtime surface (decisions/0009).
 
 ---
 

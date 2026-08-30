@@ -6,7 +6,7 @@
 // src/ depth and the out-dir depth (../../../SignalDecorators.js). ASCII-only.
 
 import * as pkgNs from "../../../SignalDecorators.js";
-import { reactive, derived, reactiveHost, reactiveEffect, batched } from "../../../SignalDecorators.js";
+import { reactive, derived, reactiveHost, reactiveEffect, batched, localTo } from "../../../SignalDecorators.js";
 
 /** The package instance that built these classes (shares its PLANS WeakMap). */
 export const pkg = pkgNs;
@@ -89,3 +89,15 @@ export class Derived extends Base {
 
 // Undecorated subclass -- wires at Base's (inherited) host mark.
 export class Leaf extends Base {}
+
+// @localTo (0014): upstream-keyed resettable local state. `draft` carries an
+// initializer, so it STARTS at that value and resets to `src` on the first
+// upstream move (the @trackedReset flavor); `mirror` has no initializer, so it
+// FOLLOWS `src` from wiring (the @localCopy flavor). Node cost: P=1 (src) + L=2
+// (draft, mirror) + 1 anchor = 4 (seen slots are plain fields, 0 nodes).
+@reactiveHost
+export class Locals {
+    @reactive accessor src = 10;
+    @localTo((self: Locals) => self.src) accessor draft = 0;
+    @localTo((self: Locals) => self.src) accessor mirror!: number;
+}

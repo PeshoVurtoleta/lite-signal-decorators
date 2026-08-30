@@ -1,5 +1,5 @@
 /**
- * @zakkster/lite-signal-decorators -- Stage-3 decorator layer over
+ * @zakkster/lite-signal-decorators -- Standard-decorators layer over
  * @zakkster/lite-signal.
  *
  * Public type surface for the JavaScript implementation in
@@ -27,6 +27,16 @@ export interface ReactiveOptions<V> {
 /** Custom equality predicate for a `@derived` member. Returning `true` halts propagation. */
 export interface DerivedOptions<V> {
     /** Custom equality predicate. Default: `Object.is`. */
+    equals?: (a: V, b: V) => boolean;
+}
+
+/** Options for a `@localTo` member. `equals` governs the UPSTREAM compare only. */
+export interface LocalToOptions<V> {
+    /**
+     * Custom equality predicate for the UPSTREAM compare (source vs the last-seen
+     * value). A coarse predicate widens how long a local override survives an
+     * upstream move. Default: `Object.is`. The write path never compares.
+     */
     equals?: (a: V, b: V) => boolean;
 }
 
@@ -100,6 +110,37 @@ export function derived<V>(
     value: (this: This) => V,
     ctx: ClassGetterDecoratorContext<This, V>,
 ) => (this: This) => V;
+
+// --- localTo ------------------------------------------------------------------
+
+/**
+ * `@localTo(source) accessor x = v` -- upstream-keyed resettable local state.
+ * Each read compares the tracked `source(self)` against a per-instance last-seen
+ * slot: an unchanged upstream yields the local override, a changed upstream
+ * resets to the upstream value (no write on read -- pure). A write always
+ * overrides. With an initializer the member STARTS there and resets on the first
+ * upstream move (the `@trackedReset` flavor); without one it FOLLOWS upstream
+ * from wiring (the `@localCopy` flavor). `source` is REQUIRED. `equals` governs
+ * the upstream compare only.
+ *
+ * The ABA contract (shipped, documented): the reset requires the upstream to
+ * change relative to the last adoption, not to have merely moved -- upstream
+ * A -> local write X -> upstream B -> upstream back to an equals-A value shows
+ * the STALE local X.
+ *
+ * @example
+ * class Editor {
+ *   `@reactive` accessor saved = "";
+ *   `@localTo`((self) => self.saved) accessor draft = "";
+ * }
+ */
+export function localTo<This, V>(
+    source: (this: This, self: This) => V,
+    options?: LocalToOptions<V>,
+): <T>(
+    target: ClassAccessorDecoratorTarget<T, V>,
+    ctx: ClassAccessorDecoratorContext<T, V>,
+) => ClassAccessorDecoratorResult<T, V>;
 
 // --- reactiveHost -------------------------------------------------------------
 
@@ -177,6 +218,20 @@ export interface SignalSpec<This = unknown, V = unknown> {
     equals?: (a: V, b: V) => boolean;
 }
 
+/** Local descriptor for a `defineReactive` `locals` map entry (`@localTo` twin). */
+export interface LocalSpec<This = unknown, V = unknown> {
+    /** The tracked upstream read `(self) => value`. REQUIRED. */
+    source: (this: This, self: This) => V;
+    /** Custom equality predicate for the upstream compare. Default: `Object.is`. */
+    equals?: (a: V, b: V) => boolean;
+    /**
+     * The initial value. Present -> the member starts here and resets to upstream
+     * on the first upstream move (`@trackedReset`). Absent -> the member follows
+     * upstream from wiring (`@localCopy`).
+     */
+    initial?: V;
+}
+
 /** Derived descriptor for a `defineReactive` `deriveds` map entry. */
 export interface DerivedSpec<This = unknown, V = unknown> {
     /** The compute body `(self) => value`. */
@@ -204,6 +259,8 @@ export interface DefineReactiveSpec<This = any> {
      * throw (ambiguous -- use `{ initial: fn }` or `{ init: (self) => value }`).
      */
     signals?: PropertyKey[] | Record<PropertyKey, unknown | SignalSpec<This>>;
+    /** Upstream-keyed locals (`@localTo` twin): a map of `key -> LocalSpec`. */
+    locals?: Record<PropertyKey, LocalSpec<This>>;
     /** Lazy deriveds: a map of `key -> (self) => value | DerivedSpec`. */
     deriveds?: Record<PropertyKey, ((this: This, self: This) => unknown) | DerivedSpec<This>>;
     /** Auto-effects: a map of `key -> (self) => void | EffectSpec`. */
@@ -289,12 +346,14 @@ export function rootOf(vm: object): NodeDescriptor;
 
 /** The measured per-instance cost of a reactive class, returned by {@link costOf}. */
 export interface ReactiveCost {
-    /** Total nodes = `signals + deriveds + effects + 1` (the anchor). */
+    /** Total nodes = `signals + locals + deriveds + effects + 1` (the anchor). */
     nodes: number;
     /** Dependency links held after every `@derived` has been read once (0007). */
     links: number;
     /** Count of `@reactive` members. */
     signals: number;
+    /** Count of `@localTo` members (each one box node; its seen slot is a plain field). */
+    locals: number;
     /** Count of `@derived` members. */
     deriveds: number;
     /** Count of `@reactiveEffect` members. */

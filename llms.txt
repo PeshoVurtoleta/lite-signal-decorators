@@ -1,6 +1,6 @@
 # @zakkster/lite-signal-decorators
 
-VERSION 1.1.1
+VERSION 1.2.0
 
 > Standard-decorators layer over @zakkster/lite-signal, built on the TC39
 > decorators proposal (Stage 2.7 since 2026-05; TS 5.x / Babel 2023-11 emit
@@ -22,12 +22,34 @@ zero decorator syntax, sharing the SAME core by function identity.
 slot for a poison handle, so any later read/write throws a named
 `ReactiveDisposedError`.
 
-## Exports (18)
+## Exports (19)
 
 - `reactive` -- `@reactive accessor x = v` (bare) or `@reactive({ equals })`
   (factory). Declares a per-instance signal.
 - `derived` -- `@derived get y()` (bare) or `@derived({ equals })` (factory).
   Declares a lazy computed derived from other reactive members.
+- `localTo` -- `@localTo(source) accessor x = v` or
+  `@localTo(source, { equals? })`. Upstream-keyed resettable local state
+  (decisions/0014). `source` is a REQUIRED tracked `(self) => value` fn, called
+  inline in the read body (no extra node, PD-54). The read is PURE (never writes
+  a box): it calls `source`, compares the value to a per-instance last-seen slot
+  via `equals` (default `Object.is`), and returns the local box `.get()` when
+  upstream is unchanged, else the upstream value (a changed upstream resets to
+  it). A write always overrides -- the write path never compares (PD-56).
+  Initial-value unification (0014): with an initializer the member STARTS at that
+  value and resets on the first upstream move (@trackedReset flavor); with NO
+  initializer the initial is the source evaluated once at wiring and the member
+  FOLLOWS upstream from the first read (@localCopy flavor) -- one decorator, both
+  semantics, selected by the natural syntax. `equals` governs the UPSTREAM
+  compare ONLY. A throwing source propagates from the read, mutating nothing
+  (fail closed). ABA contract (shipped, honest, never softened): no public epoch
+  exists (NodeDescriptor is {id, kind, value}), so the compare is VALUE-based --
+  upstream A -> local write X -> upstream B -> upstream back to an equals-A value
+  -> the read shows the STALE LOCAL X (the reset needs upstream to change
+  relative to the last adoption, not to have moved transitively). tracked-toolbox
+  @localCopy has the same property. Storage per member: ONE signal box + ONE
+  plain per-instance seen-slot (never reactive); cost delta +1 node, +0 for the
+  slot -- the per-instance formula becomes P+L+D+E+1.
 - `reactiveEffect` -- `@reactiveEffect m()` (bare) or
   `@reactiveEffect({ scheduler })` (factory). A method that auto-runs as an
   effect once the instance is wired. The auto-effect tracks; the public method is
@@ -45,7 +67,7 @@ slot for a poison handle, so any later read/write throws a named
   (factory). The single wiring site; wraps the class. A `registry` isolates the
   whole host chain (see the registry law).
 - `defineReactive(Class, spec) -> Class'` -- the buildless twin. `spec` is
-  `{ signals, deriveds, effects, host }`; it installs the members on
+  `{ signals, deriveds, locals, effects, host }`; it installs the members on
   `Class.prototype` and wraps the class through the same host step. See the
   buildless contract.
 - `disposeReactive(vm) -> boolean` -- cascade + poison teardown. Idempotent: a
@@ -70,7 +92,7 @@ slot for a poison handle, so any later read/write throws a named
 - `costOf(Factory) -> { nodes, links, signals, deriveds, effects }` -- the
   measured settled per-instance cost on the class's bound registry (frozen,
   cached). Double-probed: an inconclusive or polluted probe throws, never
-  guesses. `nodes` = P+D+E+1; `links` = the first-full-read link count. See
+  guesses. `nodes` = P+L+D+E+1; `links` = the first-full-read link count. See
   "Introspection & audit".
 - `capacityFor(inventory, { headroom }?) -> RegistryConfig` -- size a
   `createRegistry` config from `[Factory, count]` pairs. Nodes exact, links x
@@ -82,7 +104,7 @@ slot for a poison handle, so any later read/write throws a named
   `FinalizationRegistry` reports any instance GC'd without `disposeReactive`.
 - `ReactiveDisposedError` -- `extends Error`, `name` `"ReactiveDisposedError"`,
   fields `className` and `key`.
-- `VERSION` -- `"1.1.1"`.
+- `VERSION` -- `"1.2.0"`.
 
 ## Registry law (one registry per host chain)
 
@@ -136,6 +158,12 @@ spec normalizes (fail closed; `Reflect.ownKeys`, so symbol keys work):
   throw (ambiguous -- wrap it in `{ initial: fn }` or `{ init }`).
 - `deriveds`: a map `{ key: (self) => value | { get, equals } }`.
 - `effects`: a MAP ONLY `{ key: (self) => void | { run, scheduler } }`.
+- `locals`: a MAP ONLY `{ key: { source, equals?, initial? } }` -- the buildless
+  twin of `@localTo` (PD-57). `source` is REQUIRED and must be a `(self) => value`
+  function (a missing or non-function source is a named throw, fail closed);
+  `equals` governs the upstream compare only; `initial` (verbatim, when present)
+  selects the @trackedReset flavor, its absence the @localCopy flavor. Same
+  read/write laws and ABA contract as the decorator.
 - `host`: `{ registry }` or omitted -- the same validation as `@reactiveHost`.
 
 Spec-declared members that collide with an own property of `Class.prototype` are
@@ -153,7 +181,7 @@ probe on its bound registry: construct, read every `@derived` once (forcing the
 lazy links), snapshot, dispose, verify the floor -- run TWICE, requiring
 identical deltas. An inconclusive probe (a data-dependent derived read, or a
 registry mutated mid-probe) or a floor-verify failure THROWS a named error;
-costOf never returns a guess. `nodes` equals P+D+E+1 (the R-A law); `links` is
+costOf never returns a guess. `nodes` equals P+L+D+E+1 (the R-A law); `links` is
 the first-full-read count. The result is frozen and cached per class. costOf
 constructs the probe instance with NO constructor arguments.
 
@@ -214,7 +242,10 @@ runtime requirement -- the shipped surface runs on 1.5.0.
 `reinitReactive` (an additive MINOR under that promise) -> 18 exports: the 13
 runtime exports plus `costOf`, `capacityFor`, `enableLabels`, `labelOf`, and
 `auditReactive` (all cold / opt-in; the hot accessor canon is byte-identical to
-0.3.0). The semver promise from here: any change to an existing export's
+0.3.0). 1.2.0 adds `localTo` (decisions/0013 strategic track, 0014 contract) as
+an additive MINOR -> 19 exports; the 1.0.0 canon (`makeGet`/`makeSet`/
+`makeDerivedGet`) stays byte-identical -- @localTo ships its own accessor bodies
+and pays its own measured cost. The semver promise from here: any change to an existing export's
 signature or behavior is a MAJOR, recorded in a decision file; new exports are
 minors; the hot accessor canon (`makeGet`/`makeSet`) does not move without a
 major. Also present since
