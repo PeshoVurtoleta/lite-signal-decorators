@@ -1,6 +1,6 @@
 # @zakkster/lite-signal-decorators
 
-VERSION 1.2.0
+VERSION 1.3.0
 
 > Standard-decorators layer over @zakkster/lite-signal, built on the TC39
 > decorators proposal (Stage 2.7 since 2026-05; TS 5.x / Babel 2023-11 emit
@@ -22,7 +22,7 @@ zero decorator syntax, sharing the SAME core by function identity.
 slot for a poison handle, so any later read/write throws a named
 `ReactiveDisposedError`.
 
-## Exports (19)
+## Exports (21)
 
 - `reactive` -- `@reactive accessor x = v` (bare) or `@reactive({ equals })`
   (factory). Declares a per-instance signal.
@@ -89,6 +89,28 @@ slot for a poison handle, so any later read/write throws a named
   dispose.
 - `rootOf(vm) -> NodeDescriptor` -- the instance's anchor descriptor; feeds
   `forEachOwned` / lite-devtools. Throws `ReactiveDisposedError` after dispose.
+- `forEachReactive(vm, fn, arg) -> count` -- cold value-member walk. Calls
+  `fn(key, box, kind, arg)` once per value-bearing member and returns the visit
+  count. `kind` is `"signal" | "local" | "derived"`; `@reactiveEffect` and
+  `@batched` are EXCLUDED (non-value-bearing -- `boxOf` refuses them). Order is
+  PLAN order: signals, then locals, then deriveds, each declaration-ordered and
+  ancestor-first (never `Reflect.ownKeys`, so it is stable across reinit). Four
+  scalar args, zero descriptor object, and the `arg` pass-through kills the
+  caller's closure -- the walk is a gated zero-alloc body. Symbol-keyed members
+  are visited (`byKey` is a Map). Fails closed on a non-reactive, unwired,
+  parked, or disposed value with the same named errors as `rootOf`.
+- `snapshotOf(vm) -> plain object` -- a shallow plain-object copy of every
+  value-bearing member (signals + locals + deriveds), keyed by member key.
+  Values are read through the ACCESSOR `vm[key]` (NOT `box.get`), so a `@localTo`
+  compare-on-read resets honestly and a `@derived` computes on read. The whole
+  walk runs under ONE `reg.untrack` thunk when `reg.isTracking()`, so calling it
+  inside an effect subscribes to NOTHING. SHALLOW by design: a nested VM is
+  copied by reference, not recursed (recursion needs a seen-set + cycle law,
+  deferred to a named consumer). Symbol keys are included
+  (`Reflect.ownKeys` law). Fails closed on parked/disposed (named
+  `ReactiveDisposedError`) and non-reactive values. This export ALLOCATES by
+  design (the returned object; ~96 B/op measured) and is reported, never gated --
+  the walk under it stays zero-alloc.
 - `costOf(Factory) -> { nodes, links, signals, deriveds, effects }` -- the
   measured settled per-instance cost on the class's bound registry (frozen,
   cached). Double-probed: an inconclusive or polluted probe throws, never
@@ -104,7 +126,7 @@ slot for a poison handle, so any later read/write throws a named
   `FinalizationRegistry` reports any instance GC'd without `disposeReactive`.
 - `ReactiveDisposedError` -- `extends Error`, `name` `"ReactiveDisposedError"`,
   fields `className` and `key`.
-- `VERSION` -- `"1.2.0"`.
+- `VERSION` -- `"1.3.0"`.
 
 ## Registry law (one registry per host chain)
 
@@ -245,7 +267,10 @@ runtime exports plus `costOf`, `capacityFor`, `enableLabels`, `labelOf`, and
 0.3.0). 1.2.0 adds `localTo` (decisions/0013 strategic track, 0014 contract) as
 an additive MINOR -> 19 exports; the 1.0.0 canon (`makeGet`/`makeSet`/
 `makeDerivedGet`) stays byte-identical -- @localTo ships its own accessor bodies
-and pays its own measured cost. The semver promise from here: any change to an existing export's
+and pays its own measured cost. 1.3.0 adds `forEachReactive` + `snapshotOf`
+(decisions/0013 ladder) as an additive MINOR -> 21 exports; `snapshotOf` is the
+named in-package consumer that admits `forEachReactive` under the 0009 bar, and
+the 1.0.0 canon stays byte-identical. The semver promise from here: any change to an existing export's
 signature or behavior is a MAJOR, recorded in a decision file; new exports are
 minors; the hot accessor canon (`makeGet`/`makeSet`) does not move without a
 major. Also present since

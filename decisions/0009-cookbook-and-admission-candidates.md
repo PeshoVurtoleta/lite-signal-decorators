@@ -226,12 +226,14 @@ instead. NONE is admitted.
    existing `rootOf`/`forEachOwned`/`labelOf` surface. No named consumer ->
    NOT admitted. (If r7 is ever cut under the plan's cut-line 3, this candidate
    still stands recorded here so the justification is not lost.)
+   ADMITTED 2026-08-30 (v1.3.0) under decisions/0013 -- `snapshotOf` ships as the named in-package consumer that admits `forEachReactive` under this ORIGINAL bar; the recorded absence above stands as the pre-admission history.
 
 3. **`snapshotOf(vm)`** -- Recipe 7 hand-rolls a flat data snapshot on the data
    side (beside the reactive-side walk). Exposed by: r7. Served instead: a flat
    hand-written snapshot walk, stated cold and allocating in the recipe's own
    words (mirrors MobX `toJS`, which also allocates). No named consumer ->
    NOT admitted.
+   ADMITTED 2026-08-30 (v1.3.0) under decisions/0013 -- `snapshotOf` ships as the named MobX-`toJS`-parity consumer (candidate 3 rides criterion (c)) and is itself the consumer that admits candidate 2; the recorded absence above stands as the pre-admission history.
 
 4. **`costOfInstance(vm)`** -- `costOf` constructs its probe with NO constructor
    arguments (0008 D-8a; `llms.txt:142-143`), so a class whose real cost depends

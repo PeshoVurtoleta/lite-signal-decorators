@@ -109,7 +109,7 @@ This is the headline. The README's migration tables cover the one-to-one decorat
 | `observable.map` | `rev` + `size` signal over a plain `Map` | `@zakkster/lite-store` | r4 | lite-store is opaque on `Map` (card: NOT FOR); stamp a plain `Map` instead |
 | `observable.deep` | rev-stamped boundary | `@zakkster/lite-store` `store()` | r5, r6 | the lite-store path is **NOT zero-GC** -- lazy per-key signals + a deep-copying `snapshot()` |
 | `observable.ref` / `.shallow` | `@reactive` (default `Object.is`) | -- | r0 | already the default; a `@reactive` member compares by identity unless you pass `equals` |
-| `toJS` | flat snapshot walk | `@zakkster/lite-store` `snapshot()` | r7 | both allocate; both are cold, opt-in, off any frame path |
+| `toJS` | `snapshotOf(vm)` (native since 1.3.0) | `@zakkster/lite-store` `snapshot()` | r7 | both allocate; both are cold, opt-in, off any frame path |
 | `when` (promise form) | -- | `@zakkster/lite-await` `whenSignal` | r8, r12 | a Promise per call -- a lifecycle boundary only, never inside a loop; r12 shows the manual deferred + the timeout/AbortSignal variants |
 | `onBecomeObserved` / `onBecomeUnobserved` | -- | `@zakkster/lite-signal` `observeObservers` | r17 | transition-only (0->1 / 1->0); a REAL tracked read drives it, construction alone does not; top-level is default-registry-only (PD-29) |
 | `observe` / `intercept` | -- | -- | r7 | not offered; `rootOf(vm)` + `registry.forEachOwned` is the audit path, and it is opt-in |
@@ -1004,6 +1004,7 @@ serialize, never in a frame.
   one. If you find yourself wanting the framework to serialize your VM for you,
   you want `snapshot(store(...))` (Recipe 6) -- a document model -- not a
   reactive collection type. The package does not grow one (PD-40).
+- Since 1.3.0 the package exports `forEachReactive`/`snapshotOf` for exactly this walk-and-serialize job; this recipe remains the buildless teaching form that shows the mechanism they now wrap.
 
 ## Recipe 8 -- The async boundary
 

@@ -1,5 +1,5 @@
 /**
- * @zakkster/lite-signal-decorators v1.2.0
+ * @zakkster/lite-signal-decorators v1.3.0
  * --------------------
  * Standard-decorators layer over @zakkster/lite-signal. Turns a plain class into
  * a reactive view-model with measured per-instance cost and deterministic
@@ -447,7 +447,7 @@ function throwReinitInitialsKey(ctorName, key, plan) {
 function throwNoBox(ctorName, key, kind) {
     const what = kind === "effect" ? "@reactiveEffect" : "@batched";
     throw new Error(
-        `${ERR}boxOf(${ctorName}, ${keyLabel(key)}) -- ${keyLabel(key)} is a ${what} member and has no backing box; boxOf serves @reactive and @derived members only.`,
+        `${ERR}boxOf(${ctorName}, ${keyLabel(key)}) -- ${keyLabel(key)} is a ${what} member and has no backing box; boxOf serves @reactive, @localTo, and @derived members only.`,
     );
 }
 
@@ -1927,6 +1927,111 @@ export function rootOf(vm) {
     return a;
 }
 
+// --- Reactive walk & snapshot (S9; cold / opt-in) -----------------------------
+
+// Hoisted kind literals -- passed by forEachReactive so a walk carries zero
+// per-visit bytes beyond its four scalar args (no per-member string allocation).
+const KIND_SIGNAL = "signal";
+const KIND_LOCAL = "local";
+const KIND_DERIVED = "derived";
+
+function throwForEachFn() {
+    throw new TypeError(
+        `${ERR}forEachReactive(vm, fn) -- fn must be a function; it is called fn(key, box, kind, arg) once per reactive member.`,
+    );
+}
+
+/**
+ * Visit every value-bearing reactive member of `vm` in PLAN order -- all signals,
+ * then all @localTo locals, then all deriveds; each group declaration-ordered and
+ * ancestor-first -- invoking `fn(key, box, kind, arg)` per member and returning
+ * the visit count. `box` is the live SignalBox/ComputedBox (exactly what boxOf
+ * returns); `kind` is the literal "signal" | "local" | "derived". @reactiveEffect
+ * and @batched members are EXCLUDED (non-value-bearing; boxOf refuses them). The
+ * `arg` pass-through threads caller state without a closure, so the walk is
+ * zero-allocation per call and per visit.
+ *
+ * @throws {TypeError} if `fn` is not a function.
+ * @throws {ReactiveDisposedError} if the instance was disposed or parked.
+ * @throws if `vm` is not wired yet, or is not a reactive instance.
+ */
+export function forEachReactive(vm, fn, arg) {
+    if (typeof fn !== "function") throwForEachFn();
+    const plan = planOf(vm);
+    if (plan === undefined) throwNoPlan("forEachReactive");
+    const a = vm[ANCHOR];
+    if (a === undefined) throwNotWired("forEachReactive");
+    if (a === DISPOSED) throw new ReactiveDisposedError(plan.ctorName, "<root>");
+    if (a === PARKED) throw new ReactiveDisposedError(plan.ctorName, "<root>", true);
+    let n = 0;
+    const sigs = plan.signals;
+    for (let i = 0; i < sigs.length; i++) {
+        const r = sigs[i];
+        const h = vm[r.slot];
+        if (h !== undefined && h[NONLIVE] === "prewired") throwPrewiredMember(plan.ctorName, r.key);
+        fn(r.key, h, KIND_SIGNAL, arg);
+        n++;
+    }
+    const locs = plan.locals;
+    for (let i = 0; i < locs.length; i++) {
+        const r = locs[i];
+        const h = vm[r.slot];
+        if (h !== undefined && h[NONLIVE] === "prewired") throwPrewiredMember(plan.ctorName, r.key);
+        fn(r.key, h, KIND_LOCAL, arg);
+        n++;
+    }
+    const ders = plan.deriveds;
+    for (let i = 0; i < ders.length; i++) {
+        const r = ders[i];
+        const h = vm[r.slot];
+        if (h !== undefined && h[NONLIVE] === "prewired") throwPrewiredMember(plan.ctorName, r.key);
+        fn(r.key, h, KIND_DERIVED, arg);
+        n++;
+    }
+    return n;
+}
+
+// snapshotOf's per-member visitor -- the forEachReactive walk contract
+// (key, box, kind, arg). snapshotOf IS forEachReactive's named in-package
+// consumer: the fill is ROUTED through the walk (0009 candidate 2 / 0013 (c)
+// admission ground), not a private duplicate. The carrier `arg` threads both the
+// instance and the output object so the visitor stays a hoisted, closure-free
+// function. The read is the ACCESSOR vm[key] (PD-62), NOT box.get -- so @localTo
+// compare-on-read and derived compute stay honest; `box`/`kind` are unused here,
+// which the walk contract permits (a consumer reads only the fields it needs).
+function snapshotVisit(key, box, kind, arg) {
+    arg.out[key] = arg.vm[key];
+}
+
+/**
+ * Return a plain `{}` snapshot of every value-bearing reactive member of `vm` --
+ * signals, @localTo locals, and deriveds -- keyed by member key (symbol keys
+ * included), each value read through the ACCESSOR `vm[key]` (so @localTo
+ * compare-on-read and derived compute stay honest). SHALLOW by design: a nested
+ * reactive VM is copied by reference, never recursed. The whole read pass runs
+ * under ONE untrack thunk when a tracking scope is active (the makeLocalSet
+ * idiom), so calling snapshotOf inside an effect does NOT subscribe the effect to
+ * every member. The returned object allocates by design -- this is a cold
+ * introspection call, never a gated hot path.
+ *
+ * @throws {ReactiveDisposedError} if the instance was disposed or parked.
+ * @throws if `vm` is not wired yet, or is not a reactive instance.
+ */
+export function snapshotOf(vm) {
+    const plan = planOf(vm);
+    if (plan === undefined) throwNoPlan("snapshotOf");
+    const a = vm[ANCHOR];
+    if (a === undefined) throwNotWired("snapshotOf");
+    if (a === DISPOSED) throw new ReactiveDisposedError(plan.ctorName, "<root>");
+    if (a === PARKED) throw new ReactiveDisposedError(plan.ctorName, "<root>", true);
+    const out = {};
+    const carrier = { vm, out };                 // allocates by design (cold call)
+    const reg = plan.reg;
+    if (reg.isTracking()) reg.untrack(() => forEachReactive(vm, snapshotVisit, carrier));
+    else forEachReactive(vm, snapshotVisit, carrier);
+    return out;
+}
+
 // --- Introspection & audit (S4; all cold / opt-in) ----------------------------
 
 function throwCostFactory() {
@@ -2254,4 +2359,4 @@ export function auditReactive(on) {
 // --- Version ------------------------------------------------------------------
 
 /** Package version. Kept in lockstep with package.json and llms.txt. */
-export const VERSION = "1.2.0";
+export const VERSION = "1.3.0";

@@ -4,6 +4,97 @@ All notable changes to `@zakkster/lite-signal-decorators` are documented here.
 The format follows Keep a Changelog; this project adheres to Semantic
 Versioning.
 
+## [1.3.0] - 2026-08-30
+
+The introspection/migration rung of the decisions/0013 strategic-admission
+ladder, and the release that proves criterion (c): `snapshotOf` ships as the
+MobX-`toJS`-parity export nobody could reach cleanly by composition, and it is
+the REAL, NAMED in-package consumer that finally admits `forEachReactive` under
+the ORIGINAL 0009 bar (a new export needs a named consumer, and a recipe is not
+one). decisions/0009 recorded both as candidates 2 and 3 with the absence
+stated plainly; this release admits them together -- `forEachReactive` because
+`snapshotOf` is built ON it, `snapshotOf` because it is the MobX-`toJS` parity a
+recipe cannot honestly serve. The recorded absence in 0009 is preserved as
+pre-admission history, not rewritten. Surface 19 -> 21.
+
+### Added
+
+- **`forEachReactive(vm, fn, arg) -> count`** (20th export) -- a cold walk over
+  every value-bearing member. Calls `fn(key, box, kind, arg)` once per member
+  and returns the visit count. `kind` is `"signal" | "local" | "derived"`;
+  `@reactiveEffect`/`@batched` are EXCLUDED (non-value-bearing -- `boxOf`
+  refuses them). Order is PLAN order: signals, then locals, then deriveds, each
+  declaration-ordered and ancestor-first (never `Reflect.ownKeys`, so it is
+  stable across reinit). Four scalar args, no descriptor object, and the `arg`
+  pass-through kills the caller's closure -- a gated zero-alloc walk. Symbol
+  keys are visited. Fails closed on non-reactive/unwired/parked/disposed with the
+  same named errors as `rootOf`.
+- **`snapshotOf(vm) -> object`** (21st export) -- a shallow plain-object copy of
+  every value-bearing member, keyed by member key, built ON `forEachReactive`.
+  Values are read through the ACCESSOR `vm[key]`, NOT `box.get`, so a `@localTo`
+  compare-on-read resets honestly and a `@derived` computes on read (PD-62). The
+  whole walk runs under ONE `untrack` when the caller is tracking, so a
+  `snapshotOf` inside an effect subscribes to nothing (PD-63). SHALLOW by design
+  (PD-64): a nested VM is copied by reference, recursion deferred to a named
+  consumer. Symbol keys included (`Reflect.ownKeys` law). Fails closed on
+  parked/disposed (`ReactiveDisposedError`, parked vs disposed flavor) and
+  non-reactive values. It ALLOCATES the returned object by design -- reported,
+  never gated; the walk under it stays zero-alloc.
+- **`test/18-introspection.test.mjs`** (22 cases) -- both emit lanes + buildless:
+  plan-order walk, symbol keys, kind tags, effect/batched exclusion, count
+  return + `arg` pass-through, the untracked-read law (a `snapshotOf` inside an
+  effect fires ONCE, then never as every member is written), r7
+  `{name,hp,mp,alive}` parity, the PD-62 accessor-read reset honesty, and the
+  fail-closed non-reactive/unwired/parked/disposed matrix.
+- **The `introspection-torture` lane** (scenario 18 of 18) with its own
+  `TORTURE_BREAK` sabotage control: 1e6 hoisted-callback `forEachReactive` walks
+  at `maxMajor 0` with control-relative minors, plus 1e5 `snapshotOf` cycles
+  whose bytes/op are REPORTED in the summary line, never gated -- the snapshot
+  allocates by design and the harness says so out loud.
+
+### Changed
+
+- **The export surface: 19 -> 21** -- an additive MINOR under the 1.0.0 semver
+  promise (new exports are minors). The 1.0.0 hot canon
+  (`makeGet`/`makeSet`/`makeDerivedGet`) stays byte-identical: both new exports
+  are cold and neither moves an accessor byte.
+- Three-place version sync to 1.3.0 (`package.json`, the `VERSION` const,
+  `llms.txt`); the `test/15` surface-freeze recount 19 -> 21.
+- `throwNoBox` message widened to name `@localTo`: `boxOf` serves `@reactive`,
+  `@localTo`, and `@derived` members only (locals pass `boxOf`; the message had
+  listed only `@reactive`/`@derived`).
+
+### Measured (rig: Node v26.3.1, arm64 Apple M4 Pro, lite-signal 1.5.0)
+
+- 1e6 hoisted-callback `forEachReactive` walks: **0.002 B/walk** (vs the 0.000
+  B/op zero-alloc control, within a +2-byte limit), gc major **0**,
+  `maxPauseMs <= 4.0`.
+- 1e5 `snapshotOf` cycles: **95.8 B/op** -- the returned object, reported as
+  "allocates by design", never gated.
+- 1e5 construct -> snapshot -> dispose cycles: `tracker.size()` 0, findings 0,
+  warnings 0, `activeNodes`/`nodes` back to exact pre-loop baseline; snapshots
+  hold no box reference.
+
+Records: decisions/0013 (strategic-admission track, criterion (c)),
+decisions/0009 (candidates 2 + 3, now stamped ADMITTED with the pre-admission
+absence preserved).
+
+### Gate output (section-10 chain, archived verbatim)
+
+```
+  fixtures              OK       exit 0 -- emit fixtures regenerated
+  test                  OK       exit 0 -- 313 pass / 0 fail
+  test:gc               OK       exit 0 -- 313 pass / 0 fail
+  torture               OK       exit 0 -- 16 passed, 2 skipped, 0 warned, 0 failed in 34.9s
+  torture:controls      OK       exit 0 -- 18 passed, 0 skipped, 0 warned, 0 failed in 3.7s
+  torture:peer-preview  REPORTED NON-BLOCKING -- lane completed (exit 0)
+  bench:selftest        OK       exit 0 -- ALL PASS -- 22 passed, 0 failed
+  cookbook              OK       exit 0/0 -- corpus 18/18 companions ok; controls 8/8 fail correctly
+  pack                  OK       exit 0 -- 7/7 files, exact 7-name set, no demo/ no Publications/
+----------------------------------------------------------------------
+  GATE PASS -- 8 blocking steps + 1 non-blocking (peer-preview)
+```
+
 ## [1.2.0] - 2026-08-30
 
 The flagship of the decisions/0013 strategic-admission track: a story-grade,

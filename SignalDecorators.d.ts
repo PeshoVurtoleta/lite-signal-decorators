@@ -342,6 +342,57 @@ export function boxOf<T = unknown>(vm: object, key: PropertyKey): SignalBox<T> |
  */
 export function rootOf(vm: object): NodeDescriptor;
 
+// --- Reactive walk & snapshot (S9) --------------------------------------------
+
+/**
+ * The literal kind tag {@link forEachReactive} passes for each visited member: a
+ * `@reactive` signal, a `@localTo` local, or a `@derived` computed. Effects and
+ * batched actions are non-value-bearing and never appear.
+ */
+export type ReactiveKind = "signal" | "local" | "derived";
+
+/**
+ * Visit every value-bearing reactive member of `vm` in PLAN order -- all signals,
+ * then all `@localTo` locals, then all deriveds; within each group declaration-
+ * ordered and ancestor-first (a subclass's own members follow its ancestors').
+ * `@reactiveEffect` and `@batched` members are EXCLUDED -- they back no box.
+ * `fn` receives the member key (symbol keys included), the live {@link SignalBox}
+ * / {@link ComputedBox} (exactly what {@link boxOf} returns), the
+ * {@link ReactiveKind} literal, and the pass-through `arg` -- which threads caller
+ * state without a closure, so the walk is zero-allocation per call and per visit.
+ * Returns the number of members visited.
+ *
+ * @throws {TypeError} if `fn` is not a function.
+ * @throws {ReactiveDisposedError} if the instance was disposed or parked.
+ * @throws if `vm` is not wired yet, or is not a reactive instance.
+ */
+export function forEachReactive<A = unknown>(
+    vm: object,
+    fn: (
+        key: PropertyKey,
+        box: SignalBox<unknown> | ComputedBox<unknown>,
+        kind: ReactiveKind,
+        arg: A,
+    ) => void,
+    arg?: A,
+): number;
+
+/**
+ * Return a plain object snapshot of every value-bearing reactive member of `vm`
+ * -- signals, `@localTo` locals, and deriveds -- keyed by member key (symbol keys
+ * included). Each value is read through the ACCESSOR `vm[key]`, NOT the raw box,
+ * so `@localTo` compare-on-read and derived compute stay honest. SHALLOW by
+ * design: a nested reactive VM is copied by reference, never recursed. The whole
+ * read pass runs under one untracked scope when a tracking context is active, so
+ * calling this inside an effect does NOT subscribe that effect to every member.
+ * The returned object allocates by design -- this is a cold introspection call,
+ * never a gated hot path.
+ *
+ * @throws {ReactiveDisposedError} if the instance was disposed or parked.
+ * @throws if `vm` is not wired yet, or is not a reactive instance.
+ */
+export function snapshotOf(vm: object): Record<PropertyKey, unknown>;
+
 // --- Introspection & audit (S4) -----------------------------------------------
 
 /** The measured per-instance cost of a reactive class, returned by {@link costOf}. */
