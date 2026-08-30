@@ -1,5 +1,5 @@
 /**
- * @zakkster/lite-signal-decorators v1.0.0
+ * @zakkster/lite-signal-decorators v1.1.0
  * --------------------
  * Stage-3 decorator layer over @zakkster/lite-signal. Turns a plain class into
  * a reactive view-model with measured per-instance cost and deterministic
