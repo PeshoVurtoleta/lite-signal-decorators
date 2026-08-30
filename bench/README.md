@@ -59,9 +59,9 @@ files cannot drift silently.
 
 ---
 
-## The seven scenarios (shapes are LAW)
+## The eight scenarios (shapes are LAW)
 
-Every adapter builds all seven or returns `{ unsupported: "<reason>" }` for a
+Every adapter builds all eight or returns `{ unsupported: "<reason>" }` for a
 scenario. The drive loops are line-for-line the same algorithm across engines
 (same op mix, same indices, same reads); no shared verb indirection dilutes the
 ratios. Each scenario's exact drive index math is written once in its scenario
@@ -75,6 +75,7 @@ file header and copied verbatim into every engine's closure.
 | `cascade` | 1 VM, P=64, D=16 + 1 aggregate | write field `i & 63`, read aggregate -> sink | ops/s |
 | `deep-vm` | 1 VM, P=1, chain D=64 | write x, read d63 -> sink | ops/s |
 | `churn` | construct (P=4, D=2, E=1), 1 write + 1 read, dispose | the loop IS the op | ops/s (HEADLINE; kill-criterion 2) |
+| `churn-reuse` | pool of parked (P=4, D=2, E=1) VMs | reinit + 2 writes + 1 read + release (pool built in warmup) | ops/s (REUSE vs churn) |
 | `retention` | 4096 cycles of the churn shape | -- | retained-heap delta + GC collection counts (GATES, not ops/s) |
 
 ---

@@ -26,8 +26,9 @@ export const ENGINES = [
 // Ordered list of all engine keys.
 export const ENGINE_KEYS = ENGINES.map((e) => e.key);
 
-// The seven scenario keys, in report order. Shapes are LAW (PLAN-S3 section 2);
-// every adapter builds all seven or returns { unsupported } per scenario.
+// The eight scenario keys, in report order. Shapes are LAW (PLAN-S3 section 2;
+// churn-reuse added S6-T7); every adapter builds all eight or returns
+// { unsupported } per scenario.
 export const SCENARIO_KEYS = [
     "vm-write",
     "fleet-read",
@@ -35,6 +36,7 @@ export const SCENARIO_KEYS = [
     "cascade",
     "deep-vm",
     "churn",
+    "churn-reuse",
     "retention",
 ];
 

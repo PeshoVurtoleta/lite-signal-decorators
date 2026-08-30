@@ -231,6 +231,9 @@ export const ADAPTER = {
         },
 
         churn(shape, ctx) { return makeChurn(shape, ctx); },
+        "churn-reuse"() {
+            return { unsupported: "MobX instances are never disposable -- observable atoms are reclaimed only by GC, so there is no release/reinit cycle to pool (only construct-and-drop, which is the CHURN lane)." };
+        },
         retention(shape, ctx) { return makeChurn(shape, ctx); },
     },
 };

@@ -253,11 +253,11 @@ test("MANIFEST 12 entries r0..r11, companions exist, gated set exact, reasons no
 // 3. SURFACE FREEZE (CB-A2)
 // ---------------------------------------------------------------------------
 
-test("CB-A2 runtime module exports EXACTLY 16 names and the corpus cites only those", async () => {
+test("CB-A2 runtime module exports EXACTLY 18 names and the corpus cites only those", async () => {
     const mod = await import(SELF_PKG);
     const exportSet = new Set(Object.keys(mod));
-    assert.equal(exportSet.size, 16,
-        "expected exactly 16 exports, saw " + exportSet.size + ": " + [...exportSet].sort().join(","));
+    assert.equal(exportSet.size, 18,
+        "expected exactly 18 exports, saw " + exportSet.size + ": " + [...exportSet].sort().join(","));
 
     // Every decorators identifier imported anywhere in cookbook/*.mjs is a member.
     for (const f of companionFiles()) {
@@ -266,7 +266,7 @@ test("CB-A2 runtime module exports EXACTLY 16 names and the corpus cites only th
         if (!names) continue;
         for (const n of names) {
             assert.ok(exportSet.has(n),
-                f + " imports ghost API '" + n + "' from " + SELF_PKG + " (not in the 16-export surface)");
+                f + " imports ghost API '" + n + "' from " + SELF_PKG + " (not in the 18-export surface)");
         }
     }
 
@@ -320,7 +320,7 @@ test("PD-39 every pointer block's cited package is allow-listed and its imports 
     const citations = loadCitations();
     const { pointers } = collectDocBlocks(readLines(join(ROOT, "COOKBOOK.md")));
     for (const p of pointers) {
-        if (p.pkg === SELF_PKG) continue; // the self-pointer is covered by the 16-export freeze
+        if (p.pkg === SELF_PKG) continue; // the self-pointer is covered by the 18-export freeze
         const entry = citations[p.pkg];
         assert.ok(entry, "pointer block at COOKBOOK.md:" + p.line + " cites " + p.pkg + " with no citations.json entry");
         const symbols = citationSymbolNames(entry);

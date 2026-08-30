@@ -23,6 +23,8 @@ import {
     reactiveEffect,
     reactiveHost,
     disposeReactive,
+    releaseReactive,
+    reinitReactive,
     VERSION,
 } from "../../SignalDecorators.js";
 import { buildClass } from "../../test/shared/mock-emitter.mjs";
@@ -116,6 +118,42 @@ function makeChurn(shape, ctx) {
             const v = vm.d0;
             SINK[i & SINK_MASK] += v;
             disposeReactive(vm);
+        },
+        expectedSum: ctx.expectedSum,
+        dispose() { reg.destroy(); },
+        stats() { return reg.stats(); },
+        liveness() { return liveness.n; },
+    };
+}
+
+// CHURN-REUSE: a pool of PARKED instances is CONSTRUCTED here (build() = the
+// harness warmup, outside the timed loop); drive() only reinit->touch->release.
+// Each instance is released once at construction so its prebuilt closure set is
+// built lazily then (decisions/0011); every later reinit re-registers those exact
+// closures with zero new allocation. A parked instance holds 0 engine nodes, so
+// only one instance is live at any instant -- the registry sizing matches CHURN.
+const REUSE_POOL = 256;
+const REUSE_POOL_MASK = REUSE_POOL - 1;
+
+function makeChurnReuse(shape, ctx) {
+    const SINK = ctx.sink;
+    const liveness = { n: 0 };
+    const reg = createRegistry({ maxNodes: sizeRegistry(2, 4 + 2 + 1 + 1), onCapacityExceeded: "throw" });
+    const VM = buildStdClass(reg, true, liveness);
+    const pool = new Array(REUSE_POOL);
+    for (let p = 0; p < REUSE_POOL; p++) {
+        const vm = new VM();
+        releaseReactive(vm);          // park (first release prebuilds the closures)
+        pool[p] = vm;
+    }
+    return {
+        drive(i) {
+            const vm = pool[i & REUSE_POOL_MASK];
+            reinitReactive(vm);       // revive; all fields reset to 0
+            vm.f0 = i; vm.f1 = i;     // touch two props (both feed d0)
+            const v = vm.d0;          // = 2*i (the effect also read d0)
+            SINK[i & SINK_MASK] += v;
+            releaseReactive(vm);      // park again -> 0 engine nodes
         },
         expectedSum: ctx.expectedSum,
         dispose() { reg.destroy(); },
@@ -224,6 +262,7 @@ export const ADAPTER = {
         },
 
         churn(shape, ctx) { return makeChurn(shape, ctx); },
+        "churn-reuse"(shape, ctx) { return makeChurnReuse(shape, ctx); },
         retention(shape, ctx) { return makeChurn(shape, ctx); },
     },
 };

@@ -240,6 +240,33 @@ export function defineReactive<C extends new (...args: any[]) => any>(
 export function disposeReactive(vm: object): boolean;
 
 /**
+ * Release a live reactive instance to the engine pool (PARKED state): cascade its
+ * anchor, dispose each signal box, and swap every slot to a parked handle that
+ * throws a parked-specific {@link ReactiveDisposedError} on touch. The instance
+ * keeps its prebuilt wiring closures so {@link reinitReactive} revives it with
+ * zero new closure allocation. Idempotent on an already-parked instance (returns
+ * `false`, mirroring {@link disposeReactive}); returns `true` on the first
+ * successful release.
+ *
+ * @throws if `vm` is not a reactive instance, is unwired, is frozen, or was
+ *   terminally disposed (a disposed instance cannot be pooled).
+ */
+export function releaseReactive(vm: object): boolean;
+
+/**
+ * Revive a PARKED reactive instance (see {@link releaseReactive}): rebuild its
+ * signal boxes -- using `initials`' values where given, else each member's
+ * declared initial -- then rebuild the anchor, deriveds, and effects through the
+ * instance's prebuilt closures. Atomicity matches construction: any throw
+ * mid-reinit leaves the instance terminally disposed. Returns the same `vm`.
+ *
+ * @param initials optional map of `@reactive` keys to reset values (a non-signal
+ *   or unknown key throws with a did-you-mean hint).
+ * @throws if `vm` is live, disposed, frozen, unwired, or not a reactive instance.
+ */
+export function reinitReactive<T extends object>(vm: T, initials?: Record<PropertyKey, unknown>): T;
+
+/**
  * Return the live {@link SignalBox} / {@link ComputedBox} backing a reactive
  * member -- for interop with raw lite-signal code and devtools.
  *

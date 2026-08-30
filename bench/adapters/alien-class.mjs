@@ -184,6 +184,9 @@ export const ADAPTER = {
         },
 
         churn(shape, ctx) { return makeChurn(shape, ctx); },
+        "churn-reuse"() {
+            return { unsupported: "a hand-rolled class over alien-signals has no pooled instance lifecycle -- signal()/computed() nodes are freed only by GC and effect stop() is terminal, so a released instance cannot be re-acquired." };
+        },
         retention(shape, ctx) { return makeChurn(shape, ctx); },
     },
 };

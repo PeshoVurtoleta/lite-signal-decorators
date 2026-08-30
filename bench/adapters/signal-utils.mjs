@@ -249,6 +249,9 @@ export const ADAPTER = {
         },
 
         churn(shape, ctx) { return makeChurn(shape, ctx); },
+        "churn-reuse"() {
+            return { unsupported: "the TC39 Signals primitive exposes no disposal or reinit API -- a State/Computed is reclaimed only by GC, so there is no acquire/release lifecycle to pool." };
+        },
         retention(shape, ctx) { return makeChurn(shape, ctx); },
     },
 };

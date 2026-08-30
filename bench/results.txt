@@ -6,17 +6,17 @@
 # after re-review; until then this file holds only this preamble. Do NOT publish
 # any table that lacks a #STAMP line or whose run did not exit 0.
 # ==== BENCH STAMP v1 (machine-generated -- do not hand-edit) ====
-# date        : 2026-08-26T07:07:01.085Z
+# date        : 2026-08-30T00:44:57.132Z
 # protocol    : isolated-per-engine  reps=5
 # host        : Apple M4 Pro  darwin/arm64  node v26.3.1  gc=on
 # engine      : /Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignalDecorators/SignalDecorators.js
-# engine.sha  : 5543bee8b23fe8b196c51dda7463deb8d55307512f915d395bb5a3355b9862eb
+# engine.sha  : 90486cb54f374721ed0f36b61c54e63308323cd4b80729bcaa0b1ffb2e923b04
 # harness     : /Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignalDecorators/bench/benchmark.mjs
 # harness.sha : 4524b3d77c7fa005bddc936c9318aa508127914e433290de78d1e0494a65d99b
 # config      : {"mode":"class-reactivity microscope","warmup":2,"runs":5,"quick":false}
-# extra       : {"adapters":{"lsd":"0.3.0","lsd-define":"0.3.0","lite-raw-boxes":"1.5.0","mobx":"7.0.3","signal-utils":"0.21.1 (+signal-polyfill 0.2.2)","alien-class":"3.2.1"},"scenarios":["vm-write","fleet-read","fleet-tick","cascade","deep-vm","churn","retention"]}
+# extra       : {"adapters":{"lsd":"1.0.0","lsd-define":"1.0.0","lite-raw-boxes":"1.5.0","mobx":"7.0.3","signal-utils":"0.21.1 (+signal-polyfill 0.2.2)","alien-class":"3.2.1"},"scenarios":["vm-write","fleet-read","fleet-tick","cascade","deep-vm","churn","churn-reuse","retention"]}
 # ================================================================
-#STAMP {"kind":"bench-stamp/v1","date":"2026-08-26T07:07:01.085Z","protocol":"isolated-per-engine","reps":5,"node":"v26.3.1","arch":"arm64","platform":"darwin","cpu":"Apple M4 Pro","gcExposed":true,"enginePath":"/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignalDecorators/SignalDecorators.js","engineSha256":"5543bee8b23fe8b196c51dda7463deb8d55307512f915d395bb5a3355b9862eb","harnessPath":"/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignalDecorators/bench/benchmark.mjs","harnessSha256":"4524b3d77c7fa005bddc936c9318aa508127914e433290de78d1e0494a65d99b","config":{"mode":"class-reactivity microscope","warmup":2,"runs":5,"quick":false},"extra":{"adapters":{"lsd":"0.3.0","lsd-define":"0.3.0","lite-raw-boxes":"1.5.0","mobx":"7.0.3","signal-utils":"0.21.1 (+signal-polyfill 0.2.2)","alien-class":"3.2.1"},"scenarios":["vm-write","fleet-read","fleet-tick","cascade","deep-vm","churn","retention"]}}
+#STAMP {"kind":"bench-stamp/v1","date":"2026-08-30T00:44:57.132Z","protocol":"isolated-per-engine","reps":5,"node":"v26.3.1","arch":"arm64","platform":"darwin","cpu":"Apple M4 Pro","gcExposed":true,"enginePath":"/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignalDecorators/SignalDecorators.js","engineSha256":"90486cb54f374721ed0f36b61c54e63308323cd4b80729bcaa0b1ffb2e923b04","harnessPath":"/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignalDecorators/bench/benchmark.mjs","harnessSha256":"4524b3d77c7fa005bddc936c9318aa508127914e433290de78d1e0494a65d99b","config":{"mode":"class-reactivity microscope","warmup":2,"runs":5,"quick":false},"extra":{"adapters":{"lsd":"1.0.0","lsd-define":"1.0.0","lite-raw-boxes":"1.5.0","mobx":"7.0.3","signal-utils":"0.21.1 (+signal-polyfill 0.2.2)","alien-class":"3.2.1"},"scenarios":["vm-write","fleet-read","fleet-tick","cascade","deep-vm","churn","churn-reuse","retention"]}}
 # EXCLUDED  classy-solid        reactivity is dead in stock Node -- solid-js's default Node resolution is its non-reactive SSR build and classy-solid imports `solid-js` internally (no deep-import escape), so live class reactivity requires running the whole process under `--conditions=browser`, a non-stock-Node run condition (PD-16).
 # EXCLUDED  reactively          @reactively/decorate ships only legacy (experimentalDecorators) decorators -- signature (proto, key, descriptor) returning a descriptor -- which the standard-2023-11 bench emitter cannot drive, and the package exposes no documented non-decorator class API.
 Config: WARMUP=2  RUNS=5  QUICK=false  gc=on
@@ -24,71 +24,81 @@ Config: WARMUP=2  RUNS=5  QUICK=false  gc=on
 --------------------------------------------------------------------------------------------------------------
 vm-write   shape={"P":4,"D":2}   iters=2000000
 --------------------------------------------------------------------------------------------------------------
-lsd                   median=   53.41ms min=   52.54ms ops/s=37448K  heapMed= 119.9KB  heapP95= 144.4KB  retained= 0.0KB    sink=ok
-lsd-define            median=   69.50ms min=   53.50ms ops/s=28777K  heapMed= 110.7KB  heapP95= 147.8KB  retained= 0.0KB    sink=ok
-lite-raw-boxes        median=   56.66ms min=   52.24ms ops/s=35296K  heapMed= 623.4KB  heapP95= 626.5KB  retained= 0.0KB    sink=ok
-mobx                  median=  291.44ms min=  290.88ms ops/s=6862K   heapMed= 270.3KB  heapP95= 1145.5KB retained= 0.0KB    sink=ok
-signal-utils          median=  256.64ms min=  246.48ms ops/s=7793K   heapMed= 716.1KB  heapP95= 767.7KB  retained= 0.3KB    sink=ok
-alien-class           median=   45.68ms min=   44.72ms ops/s=43784K  heapMed= 12.6KB   heapP95= 479.6KB  retained= 0.0KB    sink=ok
+lsd                   median=   55.91ms min=   54.53ms ops/s=35773K  heapMed= 117.9KB  heapP95= 147.6KB  retained= 0.0KB    sink=ok
+lsd-define            median=   71.32ms min=   54.95ms ops/s=28043K  heapMed= 110.5KB  heapP95= 148.3KB  retained= 0.0KB    sink=ok
+lite-raw-boxes        median=   59.16ms min=   53.38ms ops/s=33808K  heapMed= 627.0KB  heapP95= 630.5KB  retained= 0.0KB    sink=ok
+mobx                  median=  298.89ms min=  296.75ms ops/s=6691K   heapMed= 270.3KB  heapP95= 1143.4KB retained= 0.0KB    sink=ok
+signal-utils          median=  258.04ms min=  250.46ms ops/s=7750K   heapMed= 719.2KB  heapP95= 765.0KB  retained= 0.0KB    sink=ok
+alien-class           median=   46.22ms min=   45.92ms ops/s=43267K  heapMed= 12.6KB   heapP95= 491.4KB  retained= 0.0KB    sink=ok
 
 --------------------------------------------------------------------------------------------------------------
 fleet-read   shape={"P":4,"D":2,"VMs":10000}   iters=2000000
 --------------------------------------------------------------------------------------------------------------
-lsd                   median=   29.72ms min=   26.84ms ops/s=67293K  heapMed= 430.3KB  heapP95= 708.7KB  retained= 0.0KB    sink=ok
-lsd-define            median=   27.91ms min=   26.99ms ops/s=71647K  heapMed= 307.0KB  heapP95= 321.0KB  retained= 0.0KB    sink=ok
-lite-raw-boxes        median=   26.93ms min=   26.18ms ops/s=74274K  heapMed= 535.3KB  heapP95= 631.7KB  retained= 0.0KB    sink=ok
-mobx                  median=  209.37ms min=  206.31ms ops/s=9552K   heapMed= 31935.1KB heapP95= 32521.9KB retained= 0.0KB    sink=ok
-signal-utils          median=   69.66ms min=   66.26ms ops/s=28710K  heapMed= 7839.8KB heapP95= 8195.5KB retained= 0.0KB    sink=ok
-alien-class           median=   24.55ms min=   24.07ms ops/s=81456K  heapMed= 1562.9KB heapP95= 2194.5KB retained= 0.0KB    sink=ok
+lsd                   median=   30.19ms min=   28.59ms ops/s=66246K  heapMed= 440.5KB  heapP95= 738.9KB  retained= 0.0KB    sink=ok
+lsd-define            median=   28.33ms min=   28.23ms ops/s=70608K  heapMed= 341.5KB  heapP95= 415.4KB  retained= 0.0KB    sink=ok
+lite-raw-boxes        median=   27.62ms min=   26.88ms ops/s=72419K  heapMed= 535.7KB  heapP95= 602.3KB  retained= 0.0KB    sink=ok
+mobx                  median=  219.21ms min=  217.08ms ops/s=9123K   heapMed= 31932.8KB heapP95= 32451.5KB retained= 0.0KB    sink=ok
+signal-utils          median=   72.69ms min=   62.49ms ops/s=27515K  heapMed= 7841.2KB heapP95= 8199.8KB retained= 0.0KB    sink=ok
+alien-class           median=   24.03ms min=   23.81ms ops/s=83216K  heapMed= 1562.9KB heapP95= 2263.7KB retained= 0.0KB    sink=ok
 
 --------------------------------------------------------------------------------------------------------------
 fleet-tick   shape={"P":4,"D":2,"VMs":10000}   iters=1000000
 --------------------------------------------------------------------------------------------------------------
-lsd                   median=   81.15ms min=   76.71ms ops/s=12323K  heapMed= 300.8KB  heapP95= 413.4KB  retained= 0.0KB    sink=ok
-lsd-define            median=   82.00ms min=   80.55ms ops/s=12194K  heapMed= 329.1KB  heapP95= 359.7KB  retained= 0.0KB    sink=ok
-lite-raw-boxes        median=   67.55ms min=   65.22ms ops/s=14803K  heapMed= 546.8KB  heapP95= 588.6KB  retained= 0.0KB    sink=ok
-mobx                  median=  166.82ms min=  165.05ms ops/s=5994K   heapMed= 14502.4KB heapP95= 14570.8KB retained= 0.0KB    sink=ok
-signal-utils          median=  155.32ms min=  146.70ms ops/s=6438K   heapMed= 8205.9KB heapP95= 8792.3KB retained= 0.0KB    sink=ok
-alien-class           median=   40.95ms min=   40.13ms ops/s=24418K  heapMed= 1562.9KB heapP95= 1599.4KB retained= 0.0KB    sink=ok
+lsd                   median=   65.45ms min=   64.21ms ops/s=15279K  heapMed= 318.5KB  heapP95= 387.9KB  retained= 0.0KB    sink=ok
+lsd-define            median=   85.75ms min=   84.81ms ops/s=11662K  heapMed= 256.3KB  heapP95= 362.4KB  retained= 0.0KB    sink=ok
+lite-raw-boxes        median=   72.43ms min=   68.19ms ops/s=13806K  heapMed= 547.5KB  heapP95= 593.6KB  retained= 0.0KB    sink=ok
+mobx                  median=  181.68ms min=  178.75ms ops/s=5504K   heapMed= 14502.2KB heapP95= 14570.8KB retained= 0.0KB    sink=ok
+signal-utils          median=  158.89ms min=  151.90ms ops/s=6293K   heapMed= 8211.6KB heapP95= 8799.2KB retained= 0.0KB    sink=ok
+alien-class           median=   41.25ms min=   40.99ms ops/s=24239K  heapMed= 1562.9KB heapP95= 1605.5KB retained= 0.0KB    sink=ok
 
 --------------------------------------------------------------------------------------------------------------
 cascade   shape={"P":64,"D":16,"group":4,"aggregate":true}   iters=500000
 --------------------------------------------------------------------------------------------------------------
-lsd                   median=  234.87ms min=  231.73ms ops/s=2128K   heapMed= 51.1KB   heapP95= 94.3KB   retained= 0.0KB    sink=ok
-lsd-define            median=  239.40ms min=  234.50ms ops/s=2088K   heapMed= 72.5KB   heapP95= 91.9KB   retained= 0.0KB    sink=ok
-lite-raw-boxes        median=  101.47ms min=   99.98ms ops/s=4927K   heapMed= 546.0KB  heapP95= 585.6KB  retained= 0.0KB    sink=ok
-mobx                  median= 2974.53ms min= 2951.51ms ops/s=168K    heapMed= 26627.4KB heapP95= 27461.2KB retained= 0.0KB    sink=ok
-signal-utils          median= 1420.99ms min= 1414.38ms ops/s=351K    heapMed= 443.7KB  heapP95= 738.2KB  retained= 0.0KB    sink=ok
-alien-class           median=  105.53ms min=  103.68ms ops/s=4738K   heapMed= 155.0KB  heapP95= 161.2KB  retained= 0.0KB    sink=ok
+lsd                   median=  237.54ms min=  229.51ms ops/s=2104K   heapMed= 72.2KB   heapP95= 96.2KB   retained= 0.0KB    sink=ok
+lsd-define            median=  237.14ms min=  229.77ms ops/s=2108K   heapMed= 51.8KB   heapP95= 104.5KB  retained= 0.0KB    sink=ok
+lite-raw-boxes        median=  105.94ms min=  104.81ms ops/s=4719K   heapMed= 547.0KB  heapP95= 568.0KB  retained= 0.0KB    sink=ok
+mobx                  median= 3058.90ms min= 3052.82ms ops/s=163K    heapMed= 25472.9KB heapP95= 26547.0KB retained= 0.0KB    sink=ok
+signal-utils          median= 1441.71ms min= 1439.84ms ops/s=346K    heapMed= 814.4KB  heapP95= 824.1KB  retained= 0.0KB    sink=ok
+alien-class           median=  107.42ms min=  107.04ms ops/s=4654K   heapMed= 156.3KB  heapP95= 576.3KB  retained= 0.0KB    sink=ok
 
 --------------------------------------------------------------------------------------------------------------
 deep-vm   shape={"P":1,"depth":64}   iters=500000
 --------------------------------------------------------------------------------------------------------------
-lsd                   median= 1261.15ms min= 1226.20ms ops/s=396K    heapMed= 84.1KB   heapP95= 117.0KB  retained= 0.0KB    sink=ok
-lsd-define            median= 1274.84ms min= 1243.17ms ops/s=392K    heapMed= 112.5KB  heapP95= 131.7KB  retained= 0.0KB    sink=ok
-lite-raw-boxes        median=  790.90ms min=  786.31ms ops/s=632K    heapMed= 38.7KB   heapP95= 62.7KB   retained= 0.0KB    sink=ok
-mobx                  median= 6557.15ms min= 6516.19ms ops/s=76K     heapMed= 2272.4KB heapP95= 5141.9KB retained= 0.0KB    sink=ok
-signal-utils          median= 2088.18ms min= 2059.19ms ops/s=239K    heapMed= 432.8KB  heapP95= 1015.1KB retained= 6.1KB    sink=ok
-alien-class           median=  557.94ms min=  554.23ms ops/s=896K    heapMed= 1044.5KB heapP95= 1073.2KB retained= 0.0KB    sink=ok
+lsd                   median= 1290.09ms min= 1249.23ms ops/s=387K    heapMed= 84.9KB   heapP95= 110.0KB  retained= 0.0KB    sink=ok
+lsd-define            median= 1291.86ms min= 1270.12ms ops/s=387K    heapMed= 86.4KB   heapP95= 111.2KB  retained= 0.0KB    sink=ok
+lite-raw-boxes        median= 1213.36ms min=  802.26ms ops/s=412K    heapMed= 32.0KB   heapP95= 65.4KB   retained= 0.0KB    sink=ok
+mobx                  median= 6443.00ms min= 6305.17ms ops/s=77K     heapMed= 4738.4KB heapP95= 4829.1KB retained= 0.0KB    sink=ok
+signal-utils          median= 2089.18ms min= 2024.59ms ops/s=239K    heapMed= 438.8KB  heapP95= 1015.8KB retained= 11.6KB   sink=ok
+alien-class           median=  549.89ms min=  543.16ms ops/s=909K    heapMed= 1021.4KB heapP95= 1056.5KB retained= 0.0KB    sink=ok
 
 --------------------------------------------------------------------------------------------------------------
 churn   shape={"P":4,"D":2,"E":1}   iters=200000
 --------------------------------------------------------------------------------------------------------------
-lsd                   median=  150.07ms min=  149.28ms ops/s=1332K   heapMed= 3707.2KB heapP95= 3759.0KB retained= 0.0KB    sink=ok
-lsd-define            median=  134.84ms min=  133.80ms ops/s=1483K   heapMed= 929.1KB  heapP95= 1026.1KB retained= 0.0KB    sink=ok
-lite-raw-boxes        median=  115.29ms min=  114.62ms ops/s=1734K   heapMed= 46729.1KB heapP95= 46819.8KB retained= 0.0KB    sink=ok
-mobx                  median=  548.57ms min=  538.07ms ops/s=364K    heapMed= 49842.3KB heapP95= 49954.4KB retained= 0.0KB    sink=ok
-signal-utils          median=  518.30ms min=  509.98ms ops/s=385K    heapMed= 19533.7KB heapP95= 21630.6KB retained= 0.0KB    sink=ok
-alien-class           median=   25.27ms min=   24.79ms ops/s=7914K   heapMed= 28764.4KB heapP95= 28799.6KB retained= 0.0KB    sink=ok
+lsd                   median=  145.70ms min=  145.24ms ops/s=1372K   heapMed= 303.3KB  heapP95= 3421.6KB retained= 0.0KB    sink=ok
+lsd-define            median=  132.33ms min=  130.41ms ops/s=1511K   heapMed= 2730.5KB heapP95= 2762.6KB retained= 0.0KB    sink=ok
+lite-raw-boxes        median=  117.38ms min=  116.60ms ops/s=1703K   heapMed= 45938.3KB heapP95= 46034.7KB retained= 0.0KB    sink=ok
+mobx                  median=  538.11ms min=  535.48ms ops/s=371K    heapMed= 49972.4KB heapP95= 50134.1KB retained= 0.0KB    sink=ok
+signal-utils          median=  509.62ms min=  506.54ms ops/s=392K    heapMed= 19466.8KB heapP95= 21633.2KB retained= 0.0KB    sink=ok
+alien-class           median=   25.30ms min=   25.22ms ops/s=7903K   heapMed= 28764.4KB heapP95= 28799.6KB retained= 0.0KB    sink=ok
+
+--------------------------------------------------------------------------------------------------------------
+churn-reuse   shape={"P":4,"D":2,"E":1}   iters=200000
+--------------------------------------------------------------------------------------------------------------
+lsd                   median=  185.39ms min=  171.26ms ops/s=1078K   heapMed= 15030.8KB heapP95= 15181.4KB retained= 0.0KB    sink=ok
+lsd-define            median=  184.70ms min=  183.08ms ops/s=1082K   heapMed= 15067.7KB heapP95= 15104.1KB retained= 0.0KB    sink=ok
+lite-raw-boxes        median=  134.24ms min=  117.21ms ops/s=1489K   heapMed= 26579.9KB heapP95= 26609.3KB retained= 0.0KB    sink=ok
+mobx                  (unsupported: MobX instances are never disposable -- observable atoms are reclaimed only by GC, so there is no release/reinit cycle to pool (only construct-and-drop, which is the CHURN lane).)
+signal-utils          (unsupported: the TC39 Signals primitive exposes no disposal or reinit API -- a State/Computed is reclaimed only by GC, so there is no acquire/release lifecycle to pool.)
+alien-class           (unsupported: a hand-rolled class over alien-signals has no pooled instance lifecycle -- signal()/computed() nodes are freed only by GC and effect stop() is terminal, so a released instance cannot be re-acquired.)
 
 --------------------------------------------------------------------------------------------------------------
 retention   shape={"P":4,"D":2,"E":1}   iters=4096
 --------------------------------------------------------------------------------------------------------------
-lsd                   cycles=4096   retainedDelta=-87.5KB   gc.major=0    gc.minor=0     sink=ok
-lsd-define            cycles=4096   retainedDelta=-146.7KB  gc.major=0    gc.minor=0     sink=ok
+lsd                   cycles=4096   retainedDelta=-68.1KB   gc.major=0    gc.minor=0     sink=ok
+lsd-define            cycles=4096   retainedDelta= 14.5KB   gc.major=0    gc.minor=0     sink=ok
 lite-raw-boxes        cycles=4096   retainedDelta=-145.6KB  gc.major=0    gc.minor=0     sink=ok
-mobx                  cycles=4096   retainedDelta= 26.7KB   gc.major=0    gc.minor=1     sink=ok
-signal-utils          cycles=4096   retainedDelta= 108.5KB  gc.major=0    gc.minor=1     sink=ok
+mobx                  cycles=4096   retainedDelta= 26.4KB   gc.major=0    gc.minor=1     sink=ok
+signal-utils          cycles=4096   retainedDelta= 92.8KB   gc.major=0    gc.minor=1     sink=ok
 alien-class           cycles=4096   retainedDelta= 0.6KB    gc.major=0    gc.minor=0     sink=ok
 
 Notes:
@@ -96,3 +106,106 @@ Notes:
   heapMed/heapP95 = transient heap per timed run; retained = heap surviving a forced GC.
   sink=ok means the summed anti-DCE sink matched the scenario's analytic oracle; REJECTED voids the lane.
   retention reports retainedDelta + GC collection counts, not ops/s (PD-19).
+
+# ==== BENCH STAMP v1 (machine-generated -- do not hand-edit) ====
+# date        : 2026-08-30T01:03:57.521Z
+# protocol    : isolated-per-engine  reps=5
+# host        : Apple M4 Pro  darwin/arm64  node v26.3.1  gc=on
+# engine      : /Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignalDecorators/SignalDecorators.js
+# engine.sha  : 45899170fa18cdf3197a19345dbd316be36ca4f6d741bf029d835663b130bd11
+# harness     : /Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignalDecorators/bench/benchmark.mjs
+# harness.sha : 4524b3d77c7fa005bddc936c9318aa508127914e433290de78d1e0494a65d99b
+# config      : {"mode":"class-reactivity microscope","warmup":2,"runs":5,"quick":false}
+# extra       : {"adapters":{"lsd":"1.1.0","lsd-define":"1.1.0","lite-raw-boxes":"1.5.0","mobx":"7.0.3","signal-utils":"0.21.1 (+signal-polyfill 0.2.2)","alien-class":"3.2.1"},"scenarios":["vm-write","fleet-read","fleet-tick","cascade","deep-vm","churn","churn-reuse","retention"]}
+# ================================================================
+#STAMP {"kind":"bench-stamp/v1","date":"2026-08-30T01:03:57.521Z","protocol":"isolated-per-engine","reps":5,"node":"v26.3.1","arch":"arm64","platform":"darwin","cpu":"Apple M4 Pro","gcExposed":true,"enginePath":"/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignalDecorators/SignalDecorators.js","engineSha256":"45899170fa18cdf3197a19345dbd316be36ca4f6d741bf029d835663b130bd11","harnessPath":"/Users/zakkster/Work/Portfolio/LiteLibrariesSuite/LiteSignalDecorators/bench/benchmark.mjs","harnessSha256":"4524b3d77c7fa005bddc936c9318aa508127914e433290de78d1e0494a65d99b","config":{"mode":"class-reactivity microscope","warmup":2,"runs":5,"quick":false},"extra":{"adapters":{"lsd":"1.1.0","lsd-define":"1.1.0","lite-raw-boxes":"1.5.0","mobx":"7.0.3","signal-utils":"0.21.1 (+signal-polyfill 0.2.2)","alien-class":"3.2.1"},"scenarios":["vm-write","fleet-read","fleet-tick","cascade","deep-vm","churn","churn-reuse","retention"]}}
+# EXCLUDED  classy-solid        reactivity is dead in stock Node -- solid-js's default Node resolution is its non-reactive SSR build and classy-solid imports `solid-js` internally (no deep-import escape), so live class reactivity requires running the whole process under `--conditions=browser`, a non-stock-Node run condition (PD-16).
+# EXCLUDED  reactively          @reactively/decorate ships only legacy (experimentalDecorators) decorators -- signature (proto, key, descriptor) returning a descriptor -- which the standard-2023-11 bench emitter cannot drive, and the package exposes no documented non-decorator class API.
+Config: WARMUP=2  RUNS=5  QUICK=false  gc=on
+
+--------------------------------------------------------------------------------------------------------------
+vm-write   shape={"P":4,"D":2}   iters=2000000
+--------------------------------------------------------------------------------------------------------------
+lsd                   median=   55.68ms min=   55.19ms ops/s=35922K  heapMed= 122.8KB  heapP95= 141.4KB  retained= 0.0KB    sink=ok
+lsd-define            median=   74.72ms min=   56.56ms ops/s=26765K  heapMed= 110.8KB  heapP95= 149.3KB  retained= 0.0KB    sink=ok
+lite-raw-boxes        median=   60.26ms min=   55.25ms ops/s=33191K  heapMed= 628.2KB  heapP95= 654.6KB  retained= 0.0KB    sink=ok
+mobx                  median=  301.26ms min=  300.68ms ops/s=6638K   heapMed= 270.3KB  heapP95= 1131.2KB retained= 0.0KB    sink=ok
+signal-utils          median=  256.27ms min=  250.63ms ops/s=7804K   heapMed= 710.1KB  heapP95= 759.7KB  retained= 0.3KB    sink=ok
+alien-class           median=   47.83ms min=   46.78ms ops/s=41816K  heapMed= 12.6KB   heapP95= 493.0KB  retained= 0.0KB    sink=ok
+
+--------------------------------------------------------------------------------------------------------------
+fleet-read   shape={"P":4,"D":2,"VMs":10000}   iters=2000000
+--------------------------------------------------------------------------------------------------------------
+lsd                   median=   31.11ms min=   29.10ms ops/s=64294K  heapMed= 445.0KB  heapP95= 872.0KB  retained= 0.0KB    sink=ok
+lsd-define            median=   29.85ms min=   29.19ms ops/s=67008K  heapMed= 308.9KB  heapP95= 341.3KB  retained= 0.0KB    sink=ok
+lite-raw-boxes        median=   28.54ms min=   27.98ms ops/s=70077K  heapMed= 541.8KB  heapP95= 631.6KB  retained= 0.0KB    sink=ok
+mobx                  median=  217.25ms min=  214.96ms ops/s=9205K   heapMed= 31932.8KB heapP95= 32505.2KB retained= 0.0KB    sink=ok
+signal-utils          median=   75.38ms min=   67.88ms ops/s=26530K  heapMed= 7850.2KB heapP95= 8262.1KB retained= 0.0KB    sink=ok
+alien-class           median=   25.22ms min=   24.16ms ops/s=79310K  heapMed= 1562.9KB heapP95= 2258.1KB retained= 11756.4KB sink=ok
+
+--------------------------------------------------------------------------------------------------------------
+fleet-tick   shape={"P":4,"D":2,"VMs":10000}   iters=1000000
+--------------------------------------------------------------------------------------------------------------
+lsd                   median=   72.16ms min=   69.94ms ops/s=13859K  heapMed= 333.3KB  heapP95= 346.3KB  retained= 0.0KB    sink=ok
+lsd-define            median=   94.57ms min=   91.18ms ops/s=10573K  heapMed= 333.8KB  heapP95= 356.9KB  retained= 0.0KB    sink=ok
+lite-raw-boxes        median=   79.43ms min=   76.23ms ops/s=12589K  heapMed= 550.9KB  heapP95= 585.7KB  retained= 0.0KB    sink=ok
+mobx                  median=  176.64ms min=  175.06ms ops/s=5661K   heapMed= 14502.4KB heapP95= 14597.4KB retained= 0.0KB    sink=ok
+signal-utils          median=  167.13ms min=  156.47ms ops/s=5983K   heapMed= 8229.1KB heapP95= 8787.5KB retained= 0.0KB    sink=ok
+alien-class           median=   42.17ms min=   41.97ms ops/s=23715K  heapMed= 1562.9KB heapP95= 1605.5KB retained= 0.0KB    sink=ok
+
+--------------------------------------------------------------------------------------------------------------
+cascade   shape={"P":64,"D":16,"group":4,"aggregate":true}   iters=500000
+--------------------------------------------------------------------------------------------------------------
+lsd                   median=  238.47ms min=  237.71ms ops/s=2096K   heapMed= 86.9KB   heapP95= 97.9KB   retained= 0.0KB    sink=ok
+lsd-define            median=  233.92ms min=  230.52ms ops/s=2137K   heapMed= 51.8KB   heapP95= 104.2KB  retained= 0.0KB    sink=ok
+lite-raw-boxes        median=  103.99ms min=  103.47ms ops/s=4807K   heapMed= 548.7KB  heapP95= 573.4KB  retained= 0.0KB    sink=ok
+mobx                  median= 3101.45ms min= 3062.88ms ops/s=161K    heapMed= 26769.5KB heapP95= 27140.9KB retained= 0.0KB    sink=ok
+signal-utils          median= 1451.35ms min= 1439.04ms ops/s=344K    heapMed= 941.3KB  heapP95= 973.9KB  retained= 1.2KB    sink=ok
+alien-class           median=  109.06ms min=  107.01ms ops/s=4584K   heapMed= 155.0KB  heapP95= 181.7KB  retained= 0.0KB    sink=ok
+
+--------------------------------------------------------------------------------------------------------------
+deep-vm   shape={"P":1,"depth":64}   iters=500000
+--------------------------------------------------------------------------------------------------------------
+lsd                   median= 1248.14ms min= 1233.44ms ops/s=400K    heapMed= 84.9KB   heapP95= 110.0KB  retained= 0.0KB    sink=ok
+lsd-define            median= 1251.11ms min= 1238.70ms ops/s=399K    heapMed= 105.0KB  heapP95= 120.9KB  retained= 0.0KB    sink=ok
+lite-raw-boxes        median=  804.90ms min=  802.21ms ops/s=621K    heapMed= 38.6KB   heapP95= 62.8KB   retained= 0.0KB    sink=ok
+mobx                  median= 6499.90ms min= 6473.74ms ops/s=76K     heapMed= 6425.6KB heapP95= 7269.8KB retained= 0.0KB    sink=ok
+signal-utils          median= 2060.22ms min= 2033.60ms ops/s=242K    heapMed= 452.4KB  heapP95= 1015.3KB retained= 4.5KB    sink=ok
+alien-class           median=  550.70ms min=  548.56ms ops/s=907K    heapMed= 1048.4KB heapP95= 1231.4KB retained= 0.0KB    sink=ok
+
+--------------------------------------------------------------------------------------------------------------
+churn   shape={"P":4,"D":2,"E":1}   iters=200000
+--------------------------------------------------------------------------------------------------------------
+lsd                   median=  151.15ms min=  148.47ms ops/s=1323K   heapMed= 492.4KB  heapP95= 3851.9KB retained= 0.0KB    sink=ok
+lsd-define            median=  132.39ms min=  131.50ms ops/s=1510K   heapMed= 2704.3KB heapP95= 2864.0KB retained= 0.0KB    sink=ok
+lite-raw-boxes        median=  118.85ms min=  117.01ms ops/s=1682K   heapMed= 45955.1KB heapP95= 46685.4KB retained= 0.0KB    sink=ok
+mobx                  median=  558.58ms min=  545.63ms ops/s=358K    heapMed= 49014.8KB heapP95= 50163.1KB retained= 0.0KB    sink=ok
+signal-utils          median=  580.73ms min=  571.93ms ops/s=344K    heapMed= 21525.5KB heapP95= 333246.3KB retained= 18370.9KB sink=ok
+alien-class           median=   25.97ms min=   25.48ms ops/s=7702K   heapMed= 28764.4KB heapP95= 28799.6KB retained= 0.0KB    sink=ok
+
+--------------------------------------------------------------------------------------------------------------
+churn-reuse   shape={"P":4,"D":2,"E":1}   iters=200000
+--------------------------------------------------------------------------------------------------------------
+lsd                   median=  172.50ms min=  169.55ms ops/s=1159K   heapMed= 15079.3KB heapP95= 15099.3KB retained= 0.0KB    sink=ok
+lsd-define            median=  169.58ms min=  168.63ms ops/s=1179K   heapMed= 15038.4KB heapP95= 15154.5KB retained= 0.0KB    sink=ok
+lite-raw-boxes        median=  135.78ms min=  118.23ms ops/s=1473K   heapMed= 26588.9KB heapP95= 26618.8KB retained= 0.0KB    sink=ok
+mobx                  (unsupported: MobX instances are never disposable -- observable atoms are reclaimed only by GC, so there is no release/reinit cycle to pool (only construct-and-drop, which is the CHURN lane).)
+signal-utils          (unsupported: the TC39 Signals primitive exposes no disposal or reinit API -- a State/Computed is reclaimed only by GC, so there is no acquire/release lifecycle to pool.)
+alien-class           (unsupported: a hand-rolled class over alien-signals has no pooled instance lifecycle -- signal()/computed() nodes are freed only by GC and effect stop() is terminal, so a released instance cannot be re-acquired.)
+
+--------------------------------------------------------------------------------------------------------------
+retention   shape={"P":4,"D":2,"E":1}   iters=4096
+--------------------------------------------------------------------------------------------------------------
+lsd                   cycles=4096   retainedDelta=-69.1KB   gc.major=0    gc.minor=0     sink=ok
+lsd-define            cycles=4096   retainedDelta= 14.3KB   gc.major=0    gc.minor=0     sink=ok
+lite-raw-boxes        cycles=4096   retainedDelta=-145.6KB  gc.major=0    gc.minor=0     sink=ok
+mobx                  cycles=4096   retainedDelta= 27.5KB   gc.major=0    gc.minor=1     sink=ok
+signal-utils          cycles=4096   retainedDelta= 93.1KB   gc.major=0    gc.minor=1     sink=ok
+alien-class           cycles=4096   retainedDelta= 0.6KB    gc.major=0    gc.minor=0     sink=ok
+
+Notes:
+  median/min = median-of-5 timed runs (min shown for spread); each run is GC-fenced.
+  heapMed/heapP95 = transient heap per timed run; retained = heap surviving a forced GC.
+  sink=ok means the summed anti-DCE sink matched the scenario's analytic oracle; REJECTED voids the lane.
+  retention reports retainedDelta + GC collection counts, not ops/s (PD-19).
+

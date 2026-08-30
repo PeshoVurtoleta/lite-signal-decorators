@@ -1,6 +1,6 @@
 # @zakkster/lite-signal-decorators
 
-VERSION 1.0.0
+VERSION 1.1.0
 
 > Stage-3 decorator layer over @zakkster/lite-signal. Turns a plain class into a
 > reactive view-model where each instance has a measured per-property cost, a
@@ -20,7 +20,7 @@ zero decorator syntax, sharing the SAME core by function identity.
 slot for a poison handle, so any later read/write throws a named
 `ReactiveDisposedError`.
 
-## Exports (16)
+## Exports (18)
 
 - `reactive` -- `@reactive accessor x = v` (bare) or `@reactive({ equals })`
   (factory). Declares a per-instance signal.
@@ -48,6 +48,18 @@ slot for a poison handle, so any later read/write throws a named
   buildless contract.
 - `disposeReactive(vm) -> boolean` -- cascade + poison teardown. Idempotent: a
   second call returns `false` and changes nothing.
+- `releaseReactive(vm) -> boolean` -- park a LIVE instance to the engine pool:
+  cascade the anchor, dispose each signal box, swap every slot to a per-class
+  PARKED handle, keep the prebuilt wiring closures. A parked instance holds ZERO
+  engine nodes. `true` on the first release, `false` on park->park (idempotent,
+  mirrors double-dispose). Fails closed on a disposed, unwired, frozen, or
+  non-reactive value. See the pooled-lifetime contract (decisions/0010, 0011).
+- `reinitReactive(vm, initials?) -> vm` -- revive a PARKED instance: rebuild each
+  signal box (`initials[key]` wins, else the plan initial), rebuild the anchor +
+  deriveds + effects through the SAME prebuilt closures, restore live slots.
+  Atomic: any throw mid-reinit routes through disposeCore and lands the instance
+  DISPOSED (a failed revival is final). Fails closed on a live, disposed, frozen,
+  unwired, or non-reactive value. Two-call lifecycle by design (decisions/0011).
 - `boxOf(vm, key) -> SignalBox | ComputedBox` -- the live box behind a member;
   throws with a did-you-mean on an unknown key, `ReactiveDisposedError` after
   dispose.
@@ -68,7 +80,7 @@ slot for a poison handle, so any later read/write throws a named
   `FinalizationRegistry` reports any instance GC'd without `disposeReactive`.
 - `ReactiveDisposedError` -- `extends Error`, `name` `"ReactiveDisposedError"`,
   fields `className` and `key`.
-- `VERSION` -- `"1.0.0"`.
+- `VERSION` -- `"1.1.0"`.
 
 ## Registry law (one registry per host chain)
 
@@ -195,12 +207,14 @@ runtime requirement -- the shipped surface runs on 1.5.0.
 
 ## Scope note
 
-1.0.0 FREEZES the export surface -- 16 exports: the 11 runtime exports plus
-`costOf`, `capacityFor`, `enableLabels`, `labelOf`, and `auditReactive` (all
-cold / opt-in; the hot accessor canon is byte-identical to 0.3.0). The semver
-promise from here: any change to an existing export's signature or behavior is a
-MAJOR, recorded in a decision file; new exports are minors; the hot accessor
-canon (`makeGet`/`makeSet`) does not move without a major. Also present since
+1.0.0 FROZE the export surface at 16; 1.1.0 adds `releaseReactive` +
+`reinitReactive` (an additive MINOR under that promise) -> 18 exports: the 13
+runtime exports plus `costOf`, `capacityFor`, `enableLabels`, `labelOf`, and
+`auditReactive` (all cold / opt-in; the hot accessor canon is byte-identical to
+0.3.0). The semver promise from here: any change to an existing export's
+signature or behavior is a MAJOR, recorded in a decision file; new exports are
+minors; the hot accessor canon (`makeGet`/`makeSet`) does not move without a
+major. Also present since
 0.3.0: the dev-side class-reactivity benchmark (`bench/`, private, never
 shipped) and the fleet-soak torture scenario; the formal kill-criteria verdicts
 live in decisions/0006-kill-criteria.md. Composition recipes over this frozen
@@ -208,8 +222,27 @@ surface (the MobX-parity-by-composition matrix, the two-plane fleet, the
 lite-store boundary) live in COOKBOOK.md, delivered GitHub-only and NOT in the
 tarball -- read it at
 https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md
-(every code block byte-verified against a GC-gated companion; decisions/0009). Still OUT of the 1.0 surface (each a
+(every code block byte-verified against a GC-gated companion; decisions/0009). Still OUT of the 1.1 surface (each a
 deliberate, documented exclusion, not an oversight): private (`#`) members,
-static members, module/global signals (raw lite-signal territory), and any
-instance reinitialization / pooling API -- an instance is single-lifetime,
-disposed once, never revived.
+static members, and module/global signals (raw lite-signal territory).
+
+## Pooled lifetime (1.1.0)
+
+An instance is no longer single-lifetime. It moves on a three-state lattice --
+LIVE / PARKED / DISPOSED -- driven by a two-call API. `releaseReactive(vm)` parks
+a LIVE instance (cascades the anchor, disposes each box, holds ZERO engine nodes,
+keeps its prebuilt wiring closures); `reinitReactive(vm, initials?)` revives a
+PARKED one (rebuilds boxes + anchor + deriveds + effects through the SAME
+closures, values reset). Two calls, not one: park and revive are separated in
+time by the pool, and `disposeReactive`'s frozen `(vm) -> boolean` signature
+cannot double as park (decisions/0011). Fail closed: every member touch on a
+PARKED instance throws `ReactiveDisposedError` with a *parked* message (not
+"disposed"), and `boxOf`/`rootOf` agree; a throw mid-reinit routes through
+disposeCore and lands the instance DISPOSED (a failed revival is final); DISPOSED
+is TERMINAL -- only a PARKED instance revives, a disposed one is gone and cannot
+be pooled. park->park is idempotent (`false`); dispose-on-parked lands DISPOSED
+and stays idempotent. The prebuilt closure set is built LAZILY at first
+`releaseReactive`, so the construct-once/dispose-once path is byte-untouched
+(0011); the amortization holds -- one closure build per reused instance,
+re-registered across all N acquire/release cycles with zero new allocation. See
+decisions/0010 (the spike contract, measured) and 0011 (the API shape).

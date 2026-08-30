@@ -67,12 +67,34 @@ const HOST_MARK = Symbol("lite-signal-decorators.host");
 // The instance's anchor NodeDescriptor lives here; DISPOSED after teardown.
 const ANCHOR = Symbol("lite-signal-decorators.anchor");
 
-// Marks the poison/prewired handles so boxOf/rootOf recognize them without
-// calling get() (PD-4): value is "disposed" or "prewired".
+// Marks the poison/prewired/parked handles so boxOf/rootOf recognize them
+// without calling get() (PD-4): value is "disposed", "prewired", or "parked".
 const NONLIVE = Symbol("lite-signal-decorators.nonlive");
 
 // Frozen sentinel written to ANCHOR on dispose (idempotency signal, PD-7).
 const DISPOSED = Object.freeze({ [NONLIVE]: "disposed" });
+
+// PD-44: frozen sentinel written to ANCHOR on releaseReactive(), the PARKED
+// state. Distinct from DISPOSED so the lattice tells a pooled instance (revivable
+// by reinitReactive) from a terminally-disposed one; both carry NONLIVE so
+// disposeCore/boxOf/rootOf classify them without touching a live node.
+const PARKED = Object.freeze({ [NONLIVE]: "parked" });
+
+// PD-42: the per-instance prebuilt closure set (S6-T2). Built at first wiring
+// (transient) and rebuilt+RETAINED at first releaseReactive, then reused by every
+// acquire (buildGraph) so a reinit allocates ZERO new closures (0010 Q3). Holds
+// the createRoot thunk, the anchor effect body, the runWithOwner thunk, and the
+// per-derived and per-effect bodies. Kept in one module-private slot on the
+// instance; a construct-once/dispose-once instance never stores it (S6-A6: the
+// prebuild adds no retained construction cost, so churn-soak's maxMajor 0 holds).
+const CLOSURES = Symbol("lite-signal-decorators.closures");
+
+// PD-44: decorator-signal initials for reinit value reset. A decorator signal's
+// initial is its field-initializer value, captured (per member, first-seen) in
+// makeInit -- NOT retained per instance, so construct-once churn pays nothing.
+// Buildless signals reset via their plan initFn instead; a caller override always
+// wins. Keyed by the frozen signal rec (bounded by the class member count).
+const SIG_INITIAL = new WeakMap();
 
 // Scratch-frame stack (D-2h): decorator signal boxes are created in accessor
 // `init` during super()'s field initialization -- BEFORE wireInstance's
@@ -162,13 +184,18 @@ const REG_METHODS = [
 // --- ReactiveDisposedError ----------------------------------------------------
 
 /**
- * Thrown when a disposed reactive member (or root) is read or written. Carries
- * the originating class name and the member key for actionable diagnostics.
+ * Thrown when a disposed OR parked reactive member (or root) is read or written.
+ * Carries the originating class name and the member key for actionable
+ * diagnostics. The optional `parked` flag selects a pooled-lifetime message so a
+ * touch on a released-to-pool instance reads differently from a zombie (PD-44) --
+ * one error class, two states, no surface growth.
  */
 export class ReactiveDisposedError extends Error {
-    constructor(className, key) {
+    constructor(className, key, parked) {
         super(
-            `${ERR}${className}.${String(key)} was used after disposeReactive() -- the reactive graph is gone`,
+            parked
+                ? `${ERR}${className}.${String(key)} was released to the pool (parked) -- call reinitReactive() to revive it before use`
+                : `${ERR}${className}.${String(key)} was used after disposeReactive() -- the reactive graph is gone`,
         );
         this.name = "ReactiveDisposedError";
         this.className = className;
@@ -325,9 +352,13 @@ function throwNotWired(what) {
     );
 }
 
-function throwSelfDisposeInDerived(ctorName, key) {
+function throwSelfDisposeInDerived(ctorName, key, op) {
+    // `op` defaults to disposeReactive so the 1.0.0 call site's message stays
+    // byte-identical; releaseReactive passes its own name (same fail-open hazard).
+    const fn = op === undefined ? "disposeReactive" : op;
+    const verb = op === undefined ? "Dispose" : "Release";
     throw new Error(
-        `${ERR}disposeReactive(${ctorName}) was called from inside its own @derived ${keyLabel(key)} computation -- derived getters must be pure. Dispose from an effect, a subscription, or plain code instead.`,
+        `${ERR}${fn}(${ctorName}) was called from inside its own @derived ${keyLabel(key)} computation -- derived getters must be pure. ${verb} from an effect, a subscription, or plain code instead.`,
     );
 }
 
@@ -350,6 +381,51 @@ function throwFrozenDispose(ctorName) {
 function throwPrewiredMember(ctorName, key) {
     throw new Error(
         `${ERR}${ctorName}.${keyLabel(key)} is not yet wired -- accessed before construction completed.`,
+    );
+}
+
+function throwReleaseDisposed(ctorName) {
+    throw new Error(
+        `${ERR}releaseReactive(${ctorName}) -- the instance was disposed (terminal) and cannot be released to the pool. disposeReactive is final; releaseReactive parks a LIVE instance for reinitReactive to revive.`,
+    );
+}
+
+function throwReleaseFrozen(ctorName) {
+    throw new TypeError(
+        `${ERR}releaseReactive(${ctorName}) -- the instance is frozen, so the parked-handle swap cannot be installed. Do not freeze a live reactive instance.`,
+    );
+}
+
+function throwReinitLive(ctorName) {
+    throw new Error(
+        `${ERR}reinitReactive(${ctorName}) -- the instance is live; call releaseReactive() to park it before reinitReactive() revives it.`,
+    );
+}
+
+function throwReinitDisposed(ctorName) {
+    throw new Error(
+        `${ERR}reinitReactive(${ctorName}) -- the instance was disposed (terminal); a disposed instance cannot be revived. Construct a fresh one.`,
+    );
+}
+
+function throwReinitFrozen(ctorName) {
+    throw new TypeError(
+        `${ERR}reinitReactive(${ctorName}) -- the instance is frozen, so live handles cannot be restored into its slots. Do not freeze a parked instance.`,
+    );
+}
+
+function throwReinitInitials(ctorName) {
+    throw new TypeError(
+        `${ERR}reinitReactive(${ctorName}, initials) -- initials must be an object mapping @reactive keys to their reset values.`,
+    );
+}
+
+function throwReinitInitialsKey(ctorName, key, plan) {
+    const avail = [];
+    for (let i = 0; i < plan.signals.length; i++) avail.push(keyLabel(plan.signals[i].key));
+    const near = nearestKey(keyLabel(key), avail);
+    throw new Error(
+        `${ERR}reinitReactive(${ctorName}) initials carries key \`${keyLabel(key)}\` that is not a @reactive signal${near ? ` -- did you mean \`${near}\`?` : ""} Signals: ${avail.join(", ")}.`,
     );
 }
 
@@ -480,6 +556,9 @@ function makeInit(rec) {
         const box = rec.plan.reg.signalBox(v, rec.opts);
         this[rec.slot] = box;
         SCRATCH.push(box);                     // D-2h: track for init-phase rollback
+        // PD-44: record the first-seen field-initializer value as this decorator
+        // signal's reinit reset value (per member, once; no per-instance retention).
+        if (!SIG_INITIAL.has(rec)) SIG_INITIAL.set(rec, v);
         return v;                              // emitter backing store, unused
     };
 }
@@ -569,6 +648,7 @@ function applyReactive(target, ctx, opts) {
         plan: null,
         poison: null,
         prewired: null,
+        parked: null,
         initFn: null,                          // decorator boxes are born at init
     };
     PENDING.push(rec);
@@ -609,6 +689,7 @@ function applyDerived(value, ctx, opts) {
         plan: null,
         poison: null,
         prewired: null,
+        parked: null,
         initFn: null,
     };
     PENDING.push(rec);
@@ -761,6 +842,15 @@ function buildHandles(rec, ctorName) {
         get() { throw new TypeError(msg); },
         set(v) { throw new TypeError(msg); },
     });
+    // PD-44: parked handle -- swapped into every slot at releaseReactive(). A
+    // touch on a pooled instance throws a parked-specific ReactiveDisposedError
+    // (naming Class.prop) so a use-after-release reads differently from a
+    // use-after-dispose. Frozen, NONLIVE-tagged so disposeCore skips it.
+    rec.parked = Object.freeze({
+        [NONLIVE]: "parked",
+        get() { throw new ReactiveDisposedError(ctorName, key, true); },
+        set(v) { throw new ReactiveDisposedError(ctorName, key, true); },
+    });
 }
 
 function nearestAncestorPlan(C) {
@@ -871,6 +961,69 @@ function claimPlan(C, ctorName, registry) {
 function makeDerivedBody(inst, fn) { return function () { return fn.call(inst, inst); }; }
 function makeEffectBody(inst, fn) { return function () { return fn.call(inst, inst); }; }
 
+// PD-42: build the per-instance closure set -- the createRoot thunk, the anchor
+// effect body (writes the owner straight into inst[ANCHOR]), the runWithOwner
+// thunk (rebuilds deriveds + effects), one body per derived, one per effect. The
+// engine retains nothing of a disposed registration (0010 Q3), so these exact
+// closure objects re-register on every acquire (buildGraph) with zero new
+// allocation. Built LAZILY at first releaseReactive and retained on the instance,
+// so a reused instance amortizes the closure cost to zero across acquire/release
+// cycles -- while a construct-once/dispose-once instance never allocates it (0011:
+// building it at first wiring measured 140 / 1 major GC in churn-soak, both over
+// the maxMajor-0 floor; the construct path stays byte-identical to 1.0.0). Cold.
+function prebuildClosures(inst, plan) {
+    const reg = plan.reg;
+    const ders = plan.deriveds;
+    const effs = plan.effects;
+    const derivedBodies = new Array(ders.length);
+    for (let i = 0; i < ders.length; i++) derivedBodies[i] = makeDerivedBody(inst, ders[i].fn);
+    const effectBodies = new Array(effs.length);
+    for (let i = 0; i < effs.length; i++) effectBodies[i] = makeEffectBody(inst, effs[i].fn);
+    const anchorBody = function () { inst[ANCHOR] = reg.getOwner(); };
+    const bundle = {
+        createRootThunk: function () { reg.effect(anchorBody); },
+        runOwnerThunk: null,
+        derivedBodies,
+        effectBodies,
+    };
+    // The runWithOwner thunk carries the SAME OFF/ON introspection branch the
+    // 1.0.0 wireInstance carried; the flags are read at CALL time, so a prebuilt
+    // closure honors a later enableLabels()/auditReactive() exactly as before.
+    // Effects wire AFTER every derived (D-4a): the first synchronous run sees
+    // every field and every derived. Dispose handles are DISCARDED -- teardown is
+    // the anchor cascade.
+    bundle.runOwnerThunk = function () {
+        for (let i = 0; i < ders.length; i++) {
+            inst[ders[i].slot] = reg.computedBox(derivedBodies[i], ders[i].opts);
+        }
+        if (INTROSPECT_ON) {
+            const effHandles = LABELS_ON ? [] : null;
+            for (let i = 0; i < effs.length; i++) {
+                const h = reg.effect(effectBodies[i], effs[i].opts);
+                if (effHandles !== null) effHandles.push(h);
+            }
+            introspectWire(inst, plan, reg, effHandles);
+        } else {
+            for (let i = 0; i < effs.length; i++) {
+                reg.effect(effectBodies[i], effs[i].opts);
+            }
+        }
+    };
+    return bundle;
+}
+
+// The node-building body invoked by reinit (S6-T2): build the R-A anchor, then the
+// deriveds + effects under it, all through a PREBUILT closure set. Signal boxes
+// are NOT built here -- reinit creates them first (all boxes, with reset values) --
+// because the value source differs between construction and reinit while the
+// anchor/derived/effect build is identical. wireInstance keeps its own inline node
+// build (below) so the construct-once path allocates exactly as 1.0.0 did (0011).
+function buildGraph(inst, plan, closures) {
+    const reg = plan.reg;
+    reg.createRoot(closures.createRootThunk);          // R-A anchor -> inst[ANCHOR]
+    reg.runWithOwner(inst[ANCHOR], closures.runOwnerThunk);
+}
+
 function wireInstance(inst, plan) {
     const reg = plan.reg;
     // The WHOLE wiring phase is atomic (D-2h): the buildless box loop and the
@@ -926,7 +1079,10 @@ function wireInstance(inst, plan) {
 function disposeCore(inst, plan) {             // assumes not already disposed
     const reg = plan.reg;
     const a = inst[ANCHOR];
-    if (a !== undefined && a !== DISPOSED) reg.dispose(a); // cascades deriveds + effects
+    // PARKED holds no live anchor node (releaseReactive already cascaded it), so a
+    // dispose-on-parked must NOT re-dispose the sentinel -- it only swaps the
+    // parked handles to poison below and lands the instance DISPOSED.
+    if (a !== undefined && a !== DISPOSED && a !== PARKED) reg.dispose(a); // cascades deriveds + effects
     const sigs = plan.signals;
     for (let i = 0; i < sigs.length; i++) {
         const r = sigs[i];
@@ -1045,6 +1201,7 @@ function makeSignalRecFromValue(key, initFn, opts) {
         plan: null,
         poison: null,
         prewired: null,
+        parked: null,
         initFn,
     };
 }
@@ -1117,6 +1274,7 @@ function makeDerivedRec(key, fn, opts) {
         plan: null,
         poison: null,
         prewired: null,
+        parked: null,
         initFn: null,
     };
 }
@@ -1312,6 +1470,129 @@ export function disposeReactive(vm) {
     return true;
 }
 
+// --- Pooled lifecycle: release + reinit (S6-T3, PD-42(b)/PD-44) ---------------
+
+// The cold inverse of buildGraph: tear the graph down to the engine pool exactly
+// as disposeCore does (anchor cascade + per-box dispose) but swap every slot to
+// its per-class PARKED handle (not poison), keep the prebuilt CLOSURES slot, and
+// set ANCHOR to the PARKED sentinel. A parked instance holds ZERO engine nodes.
+function releaseCore(inst, plan) {             // assumes a LIVE instance
+    const reg = plan.reg;
+    const a = inst[ANCHOR];
+    if (a !== undefined && a !== DISPOSED && a !== PARKED) reg.dispose(a); // cascades deriveds + effects
+    const sigs = plan.signals;
+    for (let i = 0; i < sigs.length; i++) {
+        const r = sigs[i];
+        const box = inst[r.slot];
+        if (box !== undefined && box[NONLIVE] === undefined) reg.dispose(box);
+        inst[r.slot] = r.parked;
+    }
+    const ders = plan.deriveds;
+    for (let i = 0; i < ders.length; i++) {
+        inst[ders[i].slot] = ders[i].parked;   // cboxes already cascaded
+    }
+    inst[ANCHOR] = PARKED;
+}
+
+/**
+ * Release a live reactive instance to the engine pool: cascade its anchor,
+ * dispose each signal box, and swap every slot to a PARKED handle that throws a
+ * parked-specific `ReactiveDisposedError` on touch. The instance keeps its
+ * prebuilt wiring closures so `reinitReactive(vm)` can revive it with zero new
+ * closure allocation. Idempotent on an already-parked instance (returns `false`,
+ * mirroring `disposeReactive`'s double-dispose contract); returns `true` on the
+ * first successful release. Fails closed (named throw) on a non-reactive value, an
+ * unwired instance, a frozen instance, or a terminally-disposed one -- a disposed
+ * instance is gone and cannot be pooled (0011).
+ */
+export function releaseReactive(vm) {
+    const plan = planOf(vm);
+    if (plan === undefined) throwNoPlan("releaseReactive");
+    const a = vm[ANCHOR];
+    if (a === PARKED) return false;            // idempotent park->park (0011)
+    if (a === DISPOSED) throwReleaseDisposed(plan.ctorName);
+    if (a === undefined) throwNotWired("releaseReactive");
+    if (Object.isFrozen(vm)) throwReleaseFrozen(plan.ctorName);
+    const reg = plan.reg;
+    // Same re-entrancy guard disposeReactive carries (D-2f): releasing from inside
+    // one of this instance's OWN @derived computations would cascade the very node
+    // being computed (fail-open). The isTracking() gate keeps the plain-code path
+    // zero-alloc; only under tracking do we pay one getOwner() descriptor.
+    if (reg.isTracking()) {
+        const cur = reg.getOwner();
+        if (cur !== undefined) {
+            const ders = plan.deriveds;
+            for (let i = 0; i < ders.length; i++) {
+                const h = vm[ders[i].slot];
+                if (h !== undefined && h[NONLIVE] === undefined && reg.nodeId(h) === cur.id) {
+                    throwSelfDisposeInDerived(plan.ctorName, ders[i].key, "releaseReactive");
+                }
+            }
+        }
+    }
+    if (INTROSPECT_ON) introspectDispose(vm, reg);
+    // Retain the prebuilt closure set on first release (reuse intent now known):
+    // every later reinit re-registers these exact closures with zero new
+    // allocation (0010 Q3), amortizing the cost to zero across acquire/release.
+    if (vm[CLOSURES] === undefined) vm[CLOSURES] = prebuildClosures(vm, plan);
+    releaseCore(vm, plan);
+    return true;
+}
+
+/**
+ * Revive a PARKED reactive instance: rebuild its signal boxes (with `initials`'
+ * values where given, else the plan's initials), rebuild the anchor, deriveds,
+ * and effects through the PREBUILT closures, and restore every slot to a live
+ * handle. Atomicity is identical to construction -- any throw mid-reinit routes
+ * through disposeCore, leaving conservation exact and the instance terminally
+ * DISPOSED (a failed revival is final; fail closed). Returns the same `vm`.
+ * Requires PARKED: fails closed (named throw) on a live, disposed, frozen,
+ * unwired, or non-reactive value -- null is not zero.
+ */
+export function reinitReactive(vm, initials) {
+    const plan = planOf(vm);
+    if (plan === undefined) throwNoPlan("reinitReactive");
+    const a = vm[ANCHOR];
+    if (a === DISPOSED) throwReinitDisposed(plan.ctorName);
+    if (a === undefined) throwNotWired("reinitReactive");
+    if (a !== PARKED) throwReinitLive(plan.ctorName);      // a live anchor node
+    if (Object.isFrozen(vm)) throwReinitFrozen(plan.ctorName);
+    if (initials !== undefined) {
+        if (initials === null || typeof initials !== "object") throwReinitInitials(plan.ctorName);
+        const ikeys = Reflect.ownKeys(initials);
+        for (let i = 0; i < ikeys.length; i++) {
+            const rec = plan.byKey.get(ikeys[i]);
+            if (rec === undefined || rec.kind !== "signal") throwReinitInitialsKey(plan.ctorName, ikeys[i], plan);
+        }
+    }
+    const reg = plan.reg;
+    const closures = vm[CLOSURES];
+    try {
+        // Rebuild every signal box with its reset value: caller override first,
+        // then the buildless plan initFn, then the decorator field-initial captured
+        // per member in makeInit. Boxes rebuild BEFORE buildGraph so deriveds and
+        // effects see them on the first synchronous run (D-4a), same as construction.
+        const sigs = plan.signals;
+        for (let i = 0; i < sigs.length; i++) {
+            const r = sigs[i];
+            let v;
+            if (initials !== undefined && Object.prototype.hasOwnProperty.call(initials, r.key)) {
+                v = initials[r.key];
+            } else if (r.initFn !== null) {
+                v = r.initFn(vm);
+            } else {
+                v = SIG_INITIAL.get(r);
+            }
+            vm[r.slot] = reg.signalBox(v, r.opts);
+        }
+        buildGraph(vm, plan, closures);
+    } catch (e) {
+        disposeCore(vm, plan);                 // failed revival is terminal -> DISPOSED
+        throw e;
+    }
+    return vm;
+}
+
 /**
  * Return the live SignalBox/ComputedBox backing a reactive member. Throws
  * `ReactiveDisposedError` if the instance was disposed, and a named error for an
@@ -1327,6 +1608,7 @@ export function boxOf(vm, key) {
     if (h === undefined || h === null) throwNotWired("boxOf");
     const nl = h[NONLIVE];
     if (nl === "disposed") throw new ReactiveDisposedError(plan.ctorName, key);
+    if (nl === "parked") throw new ReactiveDisposedError(plan.ctorName, key, true);
     if (nl === "prewired") throwPrewiredMember(plan.ctorName, key);
     return h;
 }
@@ -1342,6 +1624,7 @@ export function rootOf(vm) {
     const a = vm[ANCHOR];
     if (a === undefined) throwNotWired("rootOf");
     if (a === DISPOSED) throw new ReactiveDisposedError(plan.ctorName, "<root>");
+    if (a === PARKED) throw new ReactiveDisposedError(plan.ctorName, "<root>", true);
     return a;
 }
 
@@ -1661,4 +1944,4 @@ export function auditReactive(on) {
 // --- Version ------------------------------------------------------------------
 
 /** Package version. Kept in lockstep with package.json and llms.txt. */
-export const VERSION = "1.0.0";
+export const VERSION = "1.1.0";

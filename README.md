@@ -238,6 +238,8 @@ Symbol keys work (`Reflect.ownKeys`). A spec key colliding with an own property 
 | Export | Signature | Behavior |
 |---|---|---|
 | `disposeReactive` | `(vm) => boolean` | Cascade + poison teardown. `true` on the first call, `false` after (idempotent). Also wired to `Symbol.dispose`, so `using vm = new Player()` disposes at block exit. Refuses a frozen instance up front (named throw, nothing half-done). |
+| `releaseReactive` | `(vm) => boolean` | Park a LIVE instance to the engine pool: cascade the anchor, dispose each box, swap every slot to a PARKED handle (touch throws `ReactiveDisposedError` with a *parked* message), keep the prebuilt wiring closures. A parked instance holds ZERO engine nodes. `true` on first release, `false` on park->park (idempotent). Fails closed on a disposed, unwired, frozen, or non-reactive value. Pooled-lifetime contract: [decisions/0010](decisions/0010-reinit-contract.md), [0011](decisions/0011-reinit-api.md). |
+| `reinitReactive` | `(vm, initials?) => vm` | Revive a PARKED instance: rebuild each box (`initials[key]` wins, else the plan initial), rebuild anchor + deriveds + effects through the SAME prebuilt closures, restore live slots (values reset). Atomic -- a throw mid-reinit lands the instance DISPOSED (a failed revival is final). Fails closed on a live, disposed, frozen, unwired, or non-reactive value. |
 | `boxOf` | `(vm, key) => SignalBox \| ComputedBox` | The live engine box behind a `@reactive`/`@derived` member -- `.peek()`, `.subscribe()`, raw interop. Unknown key: named throw with a did-you-mean. After dispose: `ReactiveDisposedError`. |
 | `rootOf` | `(vm) => NodeDescriptor` | The instance's anchor descriptor -- feeds `forEachOwned` and lite-devtools. Throws `ReactiveDisposedError` after dispose. |
 
@@ -257,7 +259,7 @@ With labels and audit off, the zero-GC budgets are byte-identical to 0.3.0 -- th
 | Export | Value |
 |---|---|
 | `ReactiveDisposedError` | `extends Error`; `name: "ReactiveDisposedError"`; fields `className`, `key`. Thrown on ANY touch of a disposed instance's surface. |
-| `VERSION` | `"1.0.0"` |
+| `VERSION` | `"1.1.0"` |
 
 ### The rejection matrix
 
@@ -374,14 +376,14 @@ The ~7 ns over raw batch is the guarded thunk + rest-array the decorator allocat
 | `disposeReactive(vm)` | none | allocation-free success path; poison handles are prebuilt per member at decoration time |
 | `boxOf` / `rootOf` / any throw | cold path | introspection and failure paths may allocate; never on the hot path |
 
-The gates that hold it (run on every change, all green at 1.0.0):
+The gates that hold it (run on every change, all green at 1.1.0):
 
-- `npm test` / `npm run test:gc` -- **228/228** on both lanes.
+- `npm test` / `npm run test:gc` -- **257/257** on both lanes.
 - Suite gate (lite-leak + lite-gc-profiler): `leak=size 0/0 findings=0 warnings=0 | gc major=0 minor=0 maxMs=0.00 | ok`.
-- Torture: **15 scenarios** (zero-GC read/write lanes at `maxMajor 0, maxPauseMs 4`; 4096-cycle leak gate at 0 live / 0 findings / 0 warnings; capacity atomicity at every overflow point; a 300-seed x 20k-op oracle with zero divergences) -- **13 run + 2 that skip correctly below their peer floors** (`scope-adoption` needs 1.6.0, `using-dispose` needs 1.9.0; the installed peer is 1.5.0). A skip *below* a floor is the forward-compat design working; a skip *at or above* it is a FAIL (run.mjs enforces floor-escalation). Every scenario carries a `TORTURE_BREAK` sabotage control that must exit non-zero -- **15/15 controls** prove each gate can actually fail.
+- Torture: **16 scenarios** (zero-GC read/write lanes at `maxMajor 0, maxPauseMs 4`; 4096-cycle leak gate at 0 live / 0 findings / 0 warnings; capacity atomicity at every overflow point; a 300-seed x 20k-op oracle with zero divergences; the `reinit-torture` acquire/release gate) -- **14 run + 2 that skip correctly below their peer floors** (`scope-adoption` needs 1.6.0, `using-dispose` needs 1.9.0; the installed peer is 1.5.0). A skip *below* a floor is the forward-compat design working; a skip *at or above* it is a FAIL (run.mjs enforces floor-escalation). Every scenario carries a `TORTURE_BREAK` sabotage control that must exit non-zero -- **16/16 controls** prove each gate can actually fail.
 - `churn-soak` + `fleet-soak`: sustained construct/use/dispose and a 10s 2k-VM fleet tick; pools at floor and retained heap flat at every sample.
 
-The cross-framework matrix lives in `bench/` (private, never shipped): six engines -- both our tiers, the hand-written `lite-raw-boxes` baseline, MobX 7, signal-utils/signal-polyfill, and a hand-rolled alien-signals class -- across seven class-shaped scenarios, checksum-verified for identical work, stamped into `bench/results.txt`. The formal verdicts are in [`decisions/0006-kill-criteria.md`](decisions/0006-kill-criteria.md): the decorated path measured **0.94x** the hand-written baseline on vm-write and **1.10x** on a 10k-instance fleet read (the 2.0x kill line cleared with margin), and **0 major + 0 minor GC over 4096 construct/use/dispose cycles** with pools at floor -- while emitting ~12.6x less transient garbage per churn run than the hand-rolled class it replaces.
+The cross-framework matrix lives in `bench/` (private, never shipped): six engines -- both our tiers, the hand-written `lite-raw-boxes` baseline, MobX 7, signal-utils/signal-polyfill, and a hand-rolled alien-signals class -- across eight class-shaped scenarios (including the `churn-reuse` acquire/release lane, where the lite tiers pool with zero retained growth and MobX/signal-utils/alien-class are structurally `unsupported` -- no disposable instance lifecycle to pool), checksum-verified for identical work, stamped into `bench/results.txt`. The formal verdicts are in [`decisions/0006-kill-criteria.md`](decisions/0006-kill-criteria.md): the decorated path measured **0.94x** the hand-written baseline on vm-write and **1.10x** on a 10k-instance fleet read (the 2.0x kill line cleared with margin), and **0 major + 0 minor GC over 4096 construct/use/dispose cycles** with pools at floor -- while emitting ~12.6x less transient garbage per churn run than the hand-rolled class it replaces.
 
 </details>
 
@@ -398,18 +400,19 @@ Full rationale lives in [`decisions/`](decisions/) -- each is a numbered, dated 
 - **Frozen instances refuse disposal up front.** `Object.freeze(vm)` makes the poison swap impossible, so `disposeReactive` throws by name *before* touching anything -- no half-dispose. `seal`/`preventExtensions` are fine.
 - **Symbol-slot storage.** Chosen over the emitter's private backing (emitter-dependent codegen) and a dict (fleet megamorphism, measured) -- and it is the same mechanism poison uses, so storage, dispose, and poison are one design.
 - **Statics and `#` privates are rejected, not half-supported.** A module-level signal belongs to raw lite-signal; a private member can't be reached by the wiring protocol -- both are named decoration-time throws.
+- **Pooled reinit is an identity-stable arena tool, not a speed shortcut (1.1.0).** `releaseReactive(vm)` parks a live instance to the engine pool and `reinitReactive(vm, initials?)` revives it -- a three-state lattice (live / parked / disposed) over the same instance, so consumers keep the object reference across turnover. It holds its gate: over 4096 acquire/release cycles at the churn shape (P=4, D=2, E=1) it measures **0 major GC**, retained delta-heap **at or below the in-process zero-alloc control**, and exact pool conservation (`activeNodes` back to baseline, zero pool growths, a parked instance holding 0 engine nodes). The honest throughput number, same shape, 2026-08-30 stamp (module 1.1.0): plain construct/dispose CHURN is *faster* -- **1323K ops/s** vs reuse's **1159K** -- because construction is already allocation-light and pool-conserving, so reinit is not a per-op win. Reach for it when you need identity-stable pooled instances under sustained turnover with zero retained growth (an arena/fleet primitive), not when you want raw op speed. MobX has no equivalent lifecycle at all: its instances are never disposable, so there is no release/reinit cycle to pool ([decisions/0010](decisions/0010-reinit-contract.md), [0011](decisions/0011-reinit-api.md)).
 
 ---
 
 ## Testing (for clients & QA)
 
 ```bash
-npm test            # node --test, 228 tests
-npm run test:gc     # the same 228 with --expose-gc (enables the allocation assertions)
+npm test            # node --test, 257 tests
+npm run test:gc     # the same 257 with --expose-gc (enables the allocation assertions)
 npm run gate        # the full pre-publish chain (section 10): fixtures -> test -> test:gc -> torture -> controls -> peer-preview (non-blocking) -> bench selftest -> cookbook -> pack
 ```
 
-**228 tests** across fifteen files, all green at 1.0.0. The decorator protocol is tested three times over: against a mock Stage-3 emitter *and* against committed real TypeScript 5 and Babel `2023-11` emits, so both toolchains' codegen is pinned, not assumed.
+**257 tests** across sixteen files, all green at 1.1.0. The decorator protocol is tested three times over: against a mock Stage-3 emitter *and* against committed real TypeScript 5 and Babel `2023-11` emits, so both toolchains' codegen is pinned, not assumed.
 
 | File | Tests | Covers |
 |---|---:|---|
@@ -427,7 +430,8 @@ npm run gate        # the full pre-publish chain (section 10): fixtures -> test 
 | `12-accounting` | 11 | `costOf` node/link/shape grid (double-probe, frozen + cached, fail-closed) + `capacityFor` budget sizing |
 | `13-labels-audit` | 10 | `enableLabels`/`labelOf` per-registry identity + `auditReactive` leak reporting, both opt-in and default-OFF |
 | `14-qa-s4-boundary` | 21 | S4 adversarial edges: stats-less facade closure, signals-only capacity floor, label/audit boundary matrix |
-| `15-cookbook` | 14 | [`COOKBOOK.md`](https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md) drift/parity: each fenced block byte-compared against its tagged companion `#region` (both directions + both-way coverage), surface freeze (exactly 16 exports), citation allowlist, link law, static-cost probe |
+| `15-cookbook` | 14 | [`COOKBOOK.md`](https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md) drift/parity: each fenced block byte-compared against its tagged companion `#region` (both directions + both-way coverage), surface freeze (exactly 18 exports), citation allowlist, link law, static-cost probe |
+| `16-reinit` | 29 | Pooled-reinit lattice on both emit lanes: park/reinit/dispose transitions, the five `reinitReactive` fail-closed states, parked-touch throws by name, `initials` boundary matrix (0..N+1 keys, null/undefined, NaN/-0 verbatim), `Symbol.dispose` on a parked instance, accessor descriptors byte-identical across reinit, self-release re-entrancy, ledger conservation |
 
 ### Emit-support matrix
 
@@ -453,13 +457,13 @@ Source hashes: `fixture.src.ts` `fb492a396340`, `static.src.ts` `81fb649965e6`, 
 Process-isolated stress scenarios built on `@zakkster/lite-leak` + `@zakkster/lite-gc-profiler`:
 
 ```bash
-npm run torture             # all 15 scenarios (13 run + 2 floor-gated skips)
+npm run torture             # all 16 scenarios (14 run + 2 floor-gated skips)
 npm run torture:semantic    # the correctness lane (CI)
 npm run torture:soak        # the wall-clock churn + fleet soaks
 npm run torture:controls    # sabotage self-test: every scenario must FAIL when broken
 ```
 
-Fifteen scenarios: emit-matrix, ordering, lifecycle, pool-conservation, zero-GC lanes, capacity atomicity (every overflow point x both construction paths), the full disposed-poison surface + resurrection storms, a 4096-cycle lite-leak gate, a **300-seed x 20k-op oracle fuzzer** (decorated vs hand-wired raw twin in lockstep: every derived value, every effect fire count, every graph opcode tally), raw/decorated interop + cross-registry + `registry.destroy()` contracts, batch/untrack semantics, the wall-clock churn soak, and a 10s 2k-VM fleet soak -- plus two forward-compat scenarios (`scope-adoption`, `using-dispose`) that **skip correctly** while the installed peer sits below their per-feature floors (1.6.0 `createScope`, 1.9.0 `Symbol.dispose`). A skip below a floor is the design working; a skip at or above it is a FAIL. On the installed 1.5.0 peer: 13 pass, 2 skip. Every scenario carries a `TORTURE_BREAK` sabotage control that must exit non-zero -- a gate that cannot fail is not a gate. Seeded lanes replay exactly via `TORTURE_SEED`.
+Sixteen scenarios: emit-matrix, ordering, lifecycle, pool-conservation, zero-GC lanes, capacity atomicity (every overflow point x both construction paths), the full disposed-poison surface + resurrection storms, a 4096-cycle lite-leak gate, a **300-seed x 20k-op oracle fuzzer** (decorated vs hand-wired raw twin in lockstep: every derived value, every effect fire count, every graph opcode tally), raw/decorated interop + cross-registry + `registry.destroy()` contracts, batch/untrack semantics, the `reinit-torture` acquire/release gate (4096 pooled cycles: `maxMajor 0`, retained delta-heap at/below the in-process zero-alloc control, exact pool conservation), the wall-clock churn soak, and a 10s 2k-VM fleet soak -- plus two forward-compat scenarios (`scope-adoption`, `using-dispose`) that **skip correctly** while the installed peer sits below their per-feature floors (1.6.0 `createScope`, 1.9.0 `Symbol.dispose`). A skip below a floor is the design working; a skip at or above it is a FAIL. On the installed 1.5.0 peer: 14 pass, 2 skip. Every scenario carries a `TORTURE_BREAK` sabotage control that must exit non-zero -- a gate that cannot fail is not a gate. Seeded lanes replay exactly via `TORTURE_SEED`.
 
 ### The cookbook lane (dev-side, never shipped)
 

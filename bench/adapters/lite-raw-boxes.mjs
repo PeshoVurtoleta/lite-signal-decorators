@@ -140,6 +140,67 @@ function makeChurn(shape, ctx) {
     };
 }
 
+// --- CHURN-REUSE: hand-wired park/reinit over raw boxes (the honesty tier) ----
+// This is what a developer writes by hand to pool a raw-box VM WITHOUT the
+// package: release disposes the anchor cascade + the bare signal boxes; reinit
+// recreates the boxes and re-runs the SAME prebuilt closures (0010 Q3) under a
+// fresh anchor. The derived/effect bodies are built ONCE and read their boxes
+// through a mutable holder, so recreated boxes flow in with zero new closures --
+// exactly the prebuilt-closure premise the package's reinitReactive automates.
+function makeReuseRaw(reg, liveness) {
+    const box = { f0: null, f1: null, f2: null, f3: null, d0: null, d1: null };
+    let anchor = null;
+    // Prebuilt closures (built ONCE per instance, reused across every cycle):
+    const rootThunk = () => { reg.effect(() => { anchor = reg.getOwner(); }); };
+    const buildThunk = () => {
+        box.d0 = reg.computedBox(() => box.f0.get() + box.f1.get());
+        box.d1 = reg.computedBox(() => box.f2.get() + box.f3.get());
+        reg.effect(() => { liveness.n++; void box.d0.get(); });
+    };
+    return {
+        box,
+        reinit() {
+            box.f0 = reg.signalBox(0); box.f1 = reg.signalBox(0);
+            box.f2 = reg.signalBox(0); box.f3 = reg.signalBox(0);
+            reg.createRoot(rootThunk);      // sets anchor via getOwner
+            reg.runWithOwner(anchor, buildThunk);
+        },
+        release() {
+            reg.dispose(anchor);            // cascades d0, d1, and the effect
+            reg.dispose(box.f0); reg.dispose(box.f1);
+            reg.dispose(box.f2); reg.dispose(box.f3);
+        },
+    };
+}
+
+function makeChurnReuse(shape, ctx) {
+    const SINK = ctx.sink;
+    const liveness = { n: 0 };
+    const reg = createRegistry({ maxNodes: sizeRegistry(2, 4 + 2 + 1 + 1), onCapacityExceeded: "throw" });
+    const POOL = 256, POOL_MASK = POOL - 1;
+    const pool = new Array(POOL);
+    for (let p = 0; p < POOL; p++) {
+        const vm = makeReuseRaw(reg, liveness);
+        vm.reinit();          // construct
+        vm.release();         // park -> 0 engine nodes (the closures live on)
+        pool[p] = vm;
+    }
+    return {
+        drive(i) {
+            const vm = pool[i & POOL_MASK];
+            vm.reinit();
+            vm.box.f0.set(i); vm.box.f1.set(i);
+            const v = vm.box.d0.get();
+            SINK[i & SINK_MASK] += v;
+            vm.release();
+        },
+        expectedSum: ctx.expectedSum,
+        dispose() { reg.destroy(); },
+        stats() { return reg.stats(); },
+        liveness() { return liveness.n; },
+    };
+}
+
 export const ADAPTER = {
     key: "lite-raw-boxes",
     version() { return resolveVersion("@zakkster/lite-signal"); },
@@ -235,6 +296,7 @@ export const ADAPTER = {
         },
 
         churn(shape, ctx) { return makeChurn(shape, ctx); },
+        "churn-reuse"(shape, ctx) { return makeChurnReuse(shape, ctx); },
         retention(shape, ctx) { return makeChurn(shape, ctx); },
     },
 };

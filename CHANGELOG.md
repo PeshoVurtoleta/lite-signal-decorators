@@ -4,19 +4,70 @@ All notable changes to `@zakkster/lite-signal-decorators` are documented here.
 The format follows Keep a Changelog; this project adheres to Semantic
 Versioning.
 
-## [Unreleased]
+## [1.1.0] - 2026-08-30
 
-Repo-only cookbook work over the frozen 1.0.0 surface. No version is minted and
-no runtime file changes: `SignalDecorators.js`, `SignalDecorators.d.ts`, the
-three version sites, `files[]`, and the shipped tarball are byte-identical. To
-fold into the owner's next release entry.
+The pooled-lifetime release: an instance is no longer single-lifetime. The
+surface grows 16 -> 18 with the additive `releaseReactive` / `reinitReactive`
+pair (a MINOR under the 1.0.0 semver promise), and this entry also folds in the
+repo-only COOKBOOK work that rode `[Unreleased]` (PD-34). The hot accessor canon
+(`makeGet` / `makeSet` / `makeDerivedGet`) and `wireInstance` are **byte-identical
+to 1.0.0** -- reinit is a cold-path inverse of dispose, the prebuilt closure set
+is built LAZILY at first `releaseReactive`, so the construct-once/dispose-once
+path takes zero new bytes and no new branches (git-diff proven; S6-A4). Dist-tag
+`latest`. Stage gate archived verbatim below: 257/257 tests on both lanes, torture
+16 scenarios (14 run + 2 forward-compat floor-skips) with 16/16 sabotage controls
+breaking as required, the peer-preview lane SUITE-GREEN per tag, cookbook corpus
+and control sweep green, pack the same 7-file set.
 
 ### Added
 
-- `COOKBOOK.md` -- composition recipes over the 1.0 surface, delivered
-  GitHub-only (repo-only, not in `files[]`; decisions/0009): the tarball stays
-  the 7-file runtime surface and the shipped README.md and llms.txt point to the
-  cookbook by absolute GitHub URL.
+- `releaseReactive(vm) -> boolean` -- park a LIVE instance to the engine pool:
+  cascade the anchor, dispose each signal box, swap every slot to a per-class
+  PARKED handle (touch throws `ReactiveDisposedError` with a *parked* message),
+  keep the prebuilt wiring closures. A parked instance holds ZERO engine nodes.
+  `true` on first release, `false` on park->park (idempotent, mirrors
+  double-dispose). Fails closed on a disposed, unwired, frozen, or non-reactive
+  value; carries the same self-in-`@derived` re-entrancy guard `disposeReactive`
+  does. The closure set is built lazily on first release (0011).
+- `reinitReactive(vm, initials?) -> vm` -- revive a PARKED instance: rebuild each
+  signal box (`initials[key]` wins, else the plan initial), rebuild anchor +
+  deriveds + effects through the SAME prebuilt closures, restore live slots
+  (values reset). Atomic -- any throw mid-reinit routes through `disposeCore` and
+  lands the instance terminally DISPOSED (a failed revival is final). Fails closed
+  on a live, disposed, frozen, unwired, or non-reactive value; `null` is not zero.
+- The pooled-lifetime lattice: LIVE / PARKED / DISPOSED on one axis, with all nine
+  transitions pinned in `test/16-reinit.test.mjs` (29 cases, both emit lanes) --
+  park->reinit->live (values reset), park->dispose (lands DISPOSED, idempotent
+  false thereafter), park->park (false), the five `reinitReactive` fail-closed
+  states, parked-touch throwing "parked" not "disposed", and `boxOf`/`rootOf`
+  agreement. No new error class (PD-44): the PARKED touch reuses
+  `ReactiveDisposedError` with a pooled-lifetime message.
+- `test/torture/reinit-torture.mjs` (group `semantic`, floor 1.5.0) -- the
+  acquire/release gate: 4096 pooled cycles at the churn shape (P=4, D=2, E=1) hold
+  `maxMajor 0`, `maxPauseMs <= 4.0`, minors CONTROL-RELATIVE (`MINOR_FLOOR + 128`),
+  retained delta-heap at/below the in-process zero-alloc control, and exact pool
+  conservation (F-0: `activeNodes` to baseline, `poolGrowths` delta 0, ledger
+  balanced). Its `TORTURE_BREAK=reinit-torture` control leaks one un-parked
+  instance per cycle and exits non-zero. Torture 15 -> 16 scenarios.
+- `bench/scenarios/churn-reuse.mjs` -- the CHURN-shape acquire/release bench lane
+  (P=4, D=2, E=1): the `lsd`, `lsd-define`, and hand-wired `lite-raw-boxes` tiers
+  pool with retained 0.0KB; `mobx`, `signal-utils`, and `alien-class` return
+  `{ unsupported }` with an honest reason (MobX instances are never disposable --
+  atoms return only via GC, so there is no release/reinit cycle to pool). Bench
+  scenarios 7 -> 8; `bench/results.txt` re-stamped.
+- `spikes/reinit-contract.mjs` -- the S6-T1 spike (four questions answered with
+  numbers on the installed 1.5.0 peer before a line of `reinitReactive` was
+  written): the engine NODE is fully pooled, the JS HANDLE is fresh-per-call but
+  never retains, one prebuilt closure drives N registrations with zero stale
+  fires, and stale external handles fail CLOSED (no aliasing). Verdict EXIT A.
+- `decisions/0010-reinit-contract.md` (the spike contract + the four measured
+  tables + the peer-registry watch) and `decisions/0011-reinit-api.md` (the
+  two-call API shape, the state lattice, the construction-cost finding, and the
+  rejected alternatives).
+- `COOKBOOK.md` -- composition recipes over the surface, delivered GitHub-only
+  (repo-only, not in `files[]`; decisions/0009): the tarball stays the 7-file
+  runtime surface and the shipped README.md and llms.txt point to the cookbook by
+  absolute GitHub URL.
 - `cookbook/` (dev-only, never shipped): a runnable companion corpus of 12
   recipes (0-11), six GC-gated with `COOKBOOK_BREAK=<id>` sabotage controls and
   six ungated each carrying a published reason; plus `cookbook/manifest.json`,
@@ -25,7 +76,8 @@ fold into the owner's next release entry.
   `npm run cookbook` (with `--controls` for the sabotage sweep and `--list`).
 - `test/15-cookbook.test.mjs` -- the drift/parity checker: each fenced block in
   `COOKBOOK.md` is byte-compared against its tagged companion `#region`,
-  bidirectionally, with a surface-freeze check, a citation check, a static-cost
+  bidirectionally, with a surface-freeze check (now exactly 18 exports; PD-48,
+  second-landing session owns the one number), a citation check, a static-cost
   check, and the shipped-doc-link check.
 - `test/gate.mjs` gains a BLOCKING `cookbook` step (the corpus lane plus the
   `COOKBOOK_BREAK` control sweep, both must exit 0), between `bench:selftest` and
@@ -37,21 +89,54 @@ fold into the owner's next release entry.
   swap now fails.
 - `package.json` `scripts.cookbook` (`node cookbook/run.mjs`) and three pinned
   devDependencies: `@zakkster/lite-store` 1.2.0, `@zakkster/lite-arena` 1.9.0,
-  `@zakkster/lite-await` 1.1.1. `files[]` and `version` are unchanged.
+  `@zakkster/lite-await` 1.1.1.
 
-### Lane summary
+### Changed
 
-Measured at closeout on the installed 1.5.0 peer: `npm test` 228 pass / 0 fail
-(was 214; `test/15-cookbook.test.mjs` adds 14 cases), green on both the plain and
-`--expose-gc` lanes. The gate chain is 8 blocking steps + 1 non-blocking
-(peer-preview), with the cookbook step between `bench:selftest` and `pack`. The
-cookbook lane: `cookbook lane: 12/12 companions ok in 1.8s`; the sabotage sweep
-`npm run cookbook -- --controls`: `cookbook lane: 6/6 controls fail correctly in
-4.6s`. `npm pack --dry-run` reports exactly 7 files, name set equal to
-{SignalDecorators.js, SignalDecorators.d.ts, llms.txt, CHANGELOG.md, README.md,
-LICENSE, package.json}. The surface is exactly 16 exports; the three version
-sites read 1.0.0; `SignalDecorators.js` and `SignalDecorators.d.ts` diff empty
-against the 1.0.0 tree.
+- The export surface grows 16 -> 18 (additive MINOR): `releaseReactive`,
+  `reinitReactive`. The 1.0.0 semver promise holds -- no existing export's
+  signature or behavior changed; the hot accessor canon does not move.
+- Suite 214 -> 257 tests, green on both the plain and `--expose-gc` lanes:
+  `test/15-cookbook.test.mjs` added 14 (214 -> 228), `test/16-reinit.test.mjs`
+  added 29 (228 -> 257). Torture 15 -> 16 scenarios; sabotage controls 15 -> 16.
+- Docs re-stamped to 1.1.0 across the three version sites
+  (`package.json`, `SignalDecorators.js` `VERSION`, `llms.txt`), the README
+  Testing/torture/design sections, and the llms.txt Exports header and scope
+  note. The llms.txt single-lifetime sentence ("disposed once, never revived") is
+  replaced by the pooled-lifetime contract and the three-state lattice, citing
+  decisions/0010 and 0011.
+- Construction cost is unchanged: the prebuilt closure set is built LAZILY at
+  first `releaseReactive` (not at construction), so a construct-once/dispose-once
+  instance carries only one WeakMap `has` beyond 1.0.0; `costOf(Factory).nodes`
+  still equals P+D+E+1 and `capacity-torture` is unperturbed. Measured evidence
+  for why lazy (a stored or transient per-construction bundle tips the
+  `maxMajor 0` churn-soak floor) is in decisions/0011.
+
+### Peer-watch note (PD-46)
+
+Outcome (i): nothing promoted. The `npm view @zakkster/lite-signal dist-tags`
+probe on 2026-08-30 shows stable `latest` still at **1.5.0**; 1.6.x
+(`createScope`) and 1.9.x (engine `Symbol.dispose`) exist only as prerelease tags,
+exactly the ones the peer-preview lane already tracks. No per-feature floor is
+promoted, `torture:peer-preview` keeps reporting per tag, the `scope-adoption`
+and `using-dispose` scenarios keep skipping legitimately below their floors, and
+the peer RANGE floor stays `>=1.5.0 <2.0.0`. Recorded in decisions/0010.
+
+### Gate output (section-10 chain, archived verbatim)
+
+```
+  fixtures              OK       exit 0 -- emit fixtures regenerated
+  test                  OK       exit 0 -- 257 pass / 0 fail
+  test:gc               OK       exit 0 -- 257 pass / 0 fail
+  torture               OK       exit 0 -- 14 passed, 2 skipped, 0 warned, 0 failed in 33.2s
+  torture:controls      OK       exit 0 -- 16 passed, 0 skipped, 0 warned, 0 failed in 2.0s
+  torture:peer-preview  REPORTED NON-BLOCKING -- lane completed (exit 0) [preview   1.9.0-preview.6     SUITE-GREEN     16 passed, 0 skipped, 0 warned, 0 failed; canary    1.9.0-canary.1      SUITE-GREEN     16 passed, 0 skipped, 0 warned, 0 failed]
+  bench:selftest        OK       exit 0 -- ALL PASS -- 22 passed, 0 failed
+  cookbook              OK       exit 0/0 -- corpus 12/12 companions ok in 1.8s; controls 6/6 controls fail correctly in 4.6s
+  pack                  OK       exit 0 -- 7/7 files, exact 7-name set, no demo/ no Publications/
+----------------------------------------------------------------------
+  GATE PASS -- 8 blocking steps + 1 non-blocking (peer-preview)
+```
 
 ## [1.0.0] - 2026-08-29
 
@@ -407,6 +492,7 @@ Initial release -- the decorator core.
 - Torture skeleton (`@zakkster/lite-leak` + `@zakkster/lite-gc-profiler`):
   retention, conservation, lifecycle, and zero-GC lanes.
 
+[1.1.0]: https://github.com/PeshoVurtoleta/lite-signal-decorators/releases/tag/v1.1.0
 [1.0.0]: https://github.com/PeshoVurtoleta/lite-signal-decorators/releases/tag/v1.0.0
 [0.4.0]: https://github.com/PeshoVurtoleta/lite-signal-decorators/releases/tag/v0.4.0
 [0.3.0]: https://github.com/PeshoVurtoleta/lite-signal-decorators/releases/tag/v0.3.0

@@ -59,6 +59,7 @@ const SCENARIOS = [
     { name: "oracle-fuzzer", file: "oracle-fuzzer.mjs", group: "semantic", floor: "1.5.0", about: "seeded shape fuzzer: decorated vs raw twin, values + fires + opcode tallies" },
     { name: "interop-torture", file: "interop-torture.mjs", group: "semantic", floor: "1.5.0", about: "decorated <-> raw in one graph + cross-registry + P-2 documented limits" },
     { name: "batch-untrack-torture", file: "batch-untrack-torture.mjs", group: "semantic", floor: "1.5.0", about: "@batched nesting/unwind + untrack dep-suppression + peek adds no edge" },
+    { name: "reinit-torture", file: "reinit-torture.mjs", group: "semantic", floor: "1.5.0", about: "S6-A1 zero-delta-heap acquire/release + S6-A2 pooled retention + S6-A3 nine-transition park/reinit lattice" },
     { name: "scope-adoption", file: "scope-adoption.mjs", group: "semantic", floor: "1.6.0", about: "forward-compat: createScope adoption alongside a decorated instance -- our P+D+E+1 cascade/poison hold, bare boxes unadopted, one graph zero interference" },
     { name: "using-dispose", file: "using-dispose.mjs", group: "semantic", floor: "1.9.0", about: "forward-compat: engine [Symbol.dispose]/using over handles + disposeReactive interop -- idempotent double-dispose, poison lands, conservation exact" },
     { name: "churn-soak", file: "churn-soak.mjs", group: "soak", floor: "1.5.0", about: "wall-clock construct/use/dispose soak: F-0 + flat heap + gcGate 0" },
