@@ -85,4 +85,41 @@ minimalism (dev artifacts never enter `files[]`), and the pipeline
 Surface growth is exactly the named exports of the ladder, nothing else
 rides along.
 
+## Addendum 2026-08-30 -- the ladder is CLOSED
+
+Four rungs shipped same-day, each a story-grade release: **v1.2.0** `@localTo`
+(criterion (a) -- glitch-free reset needs in-package compare-on-read); **v1.3.0**
+`snapshotOf` + `forEachReactive` (criterion (c) -- the toJS-parity snapshot is the
+original-bar consumer that admits the walk it exports beside); **v1.4.0**
+`costOfInstance` (criterion (b) -- the measured-instance pillar, the demo's
+shape-drift wall + HUD the live consumer); **v1.5.0** `createFleet` (criterion (d)
+-- the flagship fleet helper, the demo's hand-rolled pool DELETED for it,
+net-negative diff). Surface **18 -> 23** across the ladder. Every rung was
+spike-or-direct per its own plan, ran the full pipeline, cleared the gate, and
+carries its measured numbers in its CHANGELOG entry.
+
+The fleet contract, recorded here (folding the cut decisions/0015): `createFleet(
+inventory, bind, opts?)` returns a handle `{ registry, Class, capacity,
+acquire(initials?), release(vm), at(i), size(), stats(), dispose() }`. The
+eager-prefill law is the spine -- all `capacity` members are constructed and
+parked at construction, so `acquire` never constructs (it pops an `Int32Array`
+free-list and `reinitReactive`s a parked member) and `release` parks the member
+back after a per-fleet symbol slot-stamp check; both hot bodies allocate zero.
+Six internal named fail-closed errors guard the misuses -- `FleetExhaustedError`,
+`FleetForeignMemberError`, `FleetDoubleReleaseError`, `FleetDisposedError`, a
+`RangeError` on out-of-range `at`, and a `TypeError` on a bad `bind`. These are
+NOT exported: one exported error class remains the surface law
+(`ReactiveDisposedError`); the fleet names are message/name-level, pinned by
+test/20. Construction is atomic (a mid-prefill throw disposes what was built and
+destroys the fleet-owned registry). `dispose()` disposes every member LIVE AND
+PARKED then destroys the registry. The extraction ground is the demo diff (the
+hand-rolled pool removed for the helper). The boot-cost honesty: the eager prefill
+moves construction to load -- ~7ms one-time at N=4096, reported not hidden, the
+price of a zero-alloc steady state.
+
+Candidates 1 (`bump`) and 7 (`onObserved` sugar) REMAIN DEFERRED behind the
+original real-consumer bar, restated and unchanged. The original bar RESUMES as
+the only track for anything new: the strategic track was a four-rung instrument,
+now spent.
+
 MIT (c) Zahary Shinikchiev <shinikchiev@yahoo.com>

@@ -1,5 +1,5 @@
 /**
- * @zakkster/lite-signal-decorators v1.4.0
+ * @zakkster/lite-signal-decorators v1.5.0
  * --------------------
  * Standard-decorators layer over @zakkster/lite-signal. Turns a plain class into
  * a reactive view-model with measured per-instance cost and deterministic
@@ -47,6 +47,7 @@ import {
     stats,
     forEachOwned,
     forEachSource,
+    createRegistry,
 } from "@zakkster/lite-signal";
 
 // --- Module state -------------------------------------------------------------
@@ -2343,6 +2344,222 @@ export function capacityFor(inventory, options) {
     };
 }
 
+// --- createFleet (S11; the fleet helper over the shipped primitives) ----------
+//
+// The flagship-audience helper (0013 (d)): capacityFor -> createRegistry -> bind
+// -> EAGER-prefill N parked members over a slot array + an Int32Array free-list.
+// The demo's hand-rolled pool (loop.ts) is the extracted spec, so acquire/release
+// are the extracted spawn/kill: reinitReactive/releaseReactive with zero-alloc
+// bookkeeping. Cold construction; the hot acquire/release/at bodies are prebuilt
+// closures over the fleet's arrays (zero allocation, fail-closed guards only).
+//
+// SLOT STAMP (PD-77 forcing condition resolved): ownership is proven by a
+// per-fleet Symbol stamped onto each vm at prefill carrying its slot index -- a
+// plain (symbol-keyed) integer field, NOT a WeakMap. A field read is one property
+// load (zero allocation, monomorphic); a WeakMap.get is a slower hash probe AND
+// retains a parallel table for the fleet's lifetime. The stamp is minted per
+// fleet, so a foreign vm (no stamp, or another fleet's stamp) reads `undefined`
+// for THIS fleet's symbol and fails closed. slots[i] === vm re-confirms identity;
+// releaseReactive() returning false (already parked) is the double-release check.
+
+function throwFleetBind() {
+    throw new TypeError(
+        `${ERR}createFleet(inventory, bind, opts?) -- bind must be a function (registry) -> BoundClass.`,
+    );
+}
+
+function throwFleetBindReturn() {
+    throw new TypeError(
+        `${ERR}createFleet -- bind(registry) must return the bound class (a constructor); the fleet constructs its members from it.`,
+    );
+}
+
+function throwFleetExhausted(ctorName, capacity) {
+    // Named so a caller can catch the capacity ceiling distinctly. The registry's
+    // own CapacityError is unreachable (all N are prealloc'd), so this pre-check
+    // is the ONLY exhaustion signal.
+    const e = new Error(
+        `${ERR}fleet<${ctorName}> is exhausted -- all ${capacity} members are live. release() one before acquire(), or size the fleet larger; capacity is fixed at construction (eager prefill).`,
+    );
+    e.name = "FleetExhaustedError";
+    throw e;
+}
+
+function throwFleetForeign(ctorName) {
+    const e = new Error(
+        `${ERR}release(vm) -- vm was not acquired from this fleet<${ctorName}> (no matching slot stamp). Release only members this fleet handed out.`,
+    );
+    e.name = "FleetForeignMemberError";
+    throw e;
+}
+
+function throwFleetDoubleRelease(ctorName) {
+    const e = new Error(
+        `${ERR}release(vm) -- vm is already parked in fleet<${ctorName}> (double release). Each acquire() pairs with exactly one release().`,
+    );
+    e.name = "FleetDoubleReleaseError";
+    throw e;
+}
+
+function throwFleetDead(ctorName, op) {
+    const e = new Error(
+        `${ERR}${op}() -- fleet<${ctorName}> was disposed; its members are torn down and its registry is destroyed. Construct a new fleet.`,
+    );
+    e.name = "FleetDisposedError";
+    throw e;
+}
+
+function throwFleetRange(ctorName, i, capacity) {
+    throw new RangeError(
+        `${ERR}at(${String(i)}) -- index out of bounds for fleet<${ctorName}> [0, ${capacity}).`,
+    );
+}
+
+/**
+ * Build a fixed-capacity fleet of reactive instances over the shipped primitives.
+ * COLD construction sizes a registry from `inventory` (capacityFor), builds it
+ * (createRegistry), hands it to `bind(registry)` so the caller binds its decorated
+ * class to that registry and returns it, then EAGER-constructs and PARKS one
+ * member per inventory unit (PD-75: acquire never constructs). Returns a Fleet
+ * handle `{ registry, Class, capacity, acquire, release, at, size, stats,
+ * dispose }`.
+ *
+ * HOT: `acquire(initials?)` pops the free-list and reinitReactive()s a parked
+ * member (throws `FleetExhaustedError` at capacity); `release(vm)` validates the
+ * slot stamp, releaseReactive()s the member back to the pool (throws on a foreign
+ * vm or a double release), and pushes its slot. `at(i)` is a bounds-checked
+ * slot read; `size()` is the live count; `stats()` passes the registry ledger
+ * through. Both hot bodies allocate nothing.
+ *
+ * `dispose()` disposes every member (live AND parked -> DISPOSED), destroys the
+ * fleet-owned registry, and marks the fleet dead; every later call fails closed
+ * with a named throw. Construction is atomic: any mid-prefill throw disposes the
+ * already-built members and destroys the registry before rethrowing (fail closed).
+ *
+ * @throws {TypeError} if `bind` is not a function or does not return a constructor.
+ * @throws if `inventory`/`opts` are invalid (via capacityFor's fail-closed checks).
+ */
+export function createFleet(inventory, bind, opts) {
+    if (typeof bind !== "function") throwFleetBind();
+    // capacityFor validates inventory + opts (unknown-key did-you-mean, headroom)
+    // and returns the eager/throw config; reuse its fail-closed checks wholesale.
+    const config = capacityFor(inventory, opts);
+    // Total prefill count = the sum of the inventory units (each pair[1] is a
+    // validated positive integer by the time capacityFor returned).
+    let capacity = 0;
+    for (let i = 0; i < inventory.length; i++) capacity += inventory[i][1];
+
+    // The fleet OWNS this registry (dispose() destroys it). Any throw from here
+    // on routes through the atomic-cleanup catch below.
+    const registry = createRegistry(config);
+    const STAMP = Symbol("lite-signal-decorators.fleet");
+    const slots = new Array(capacity);
+    const free = new Int32Array(capacity);      // free-list: free[0..freeTop) = idle slots
+    let Class;
+    let ctorName;
+    let built = 0;
+    try {
+        Class = bind(registry);
+        if (typeof Class !== "function") throwFleetBindReturn();
+        ctorName = Class.name || "fleet";
+        for (let i = 0; i < capacity; i++) {
+            const vm = new Class();             // eager construct on the fleet's registry
+            vm[STAMP] = i;                      // slot stamp: ownership + slot index
+            releaseReactive(vm);                // park it (PD-75); nodes return to pool
+            slots[i] = vm;
+            free[i] = i;
+            built = i + 1;
+        }
+    } catch (e) {
+        for (let j = 0; j < built; j++) disposeReactive(slots[j]);
+        registry.destroy();                     // tear the fleet-owned registry down
+        throw e;                                // atomic: nothing half-built survives
+    }
+
+    let freeTop = capacity;                     // all slots idle (all parked)
+    let dead = false;
+
+    // HOT: revive the head parked slot. reinitReactive resets its boxes to
+    // `initials` (undefined = the plan's reset values) with zero closure alloc.
+    // ORDERING (mirrors fleetRelease): PEEK the candidate via free[freeTop-1],
+    // run the FALLIBLE reinit FIRST, and decrement freeTop only AFTER it succeeds.
+    // reinit throws named on bad initials (e.g. acquire({typo:1})) and on an
+    // out-of-band-disposed member; decrementing before it would strand the popped
+    // slot above freeTop -- lost capacity, over-reported size(). Fail closed:
+    // freeTop moves only on success, so a rejected acquire leaves the slot
+    // acquirable. (a) The disposed case: a member disposed out of band via at()
+    // wedges at the free-list head -- every acquire rethrows reinit's named
+    // "disposed (terminal)" error, refusing loudly rather than eroding capacity
+    // silently. Left as (a) not (b): reinit's disposed and bad-initials throws are
+    // both plain Errors with no distinct code/class, so dropping only the disposed
+    // slot would need brittle message-matching -- a fail-open hazard worse than an
+    // honest, named refusal.
+    function fleetAcquire(initials) {
+        if (dead) throwFleetDead(ctorName, "acquire");
+        if (freeTop === 0) throwFleetExhausted(ctorName, capacity);
+        const i = free[freeTop - 1];
+        const vm = slots[i];
+        reinitReactive(vm, initials);
+        freeTop = freeTop - 1;
+        return vm;
+    }
+
+    // HOT: validate ownership by the slot stamp, then park. `vm[STAMP]` is
+    // `undefined` for a foreign or non-object vm (fail closed); slots[i] === vm
+    // re-confirms identity; releaseReactive() false is the double-release signal.
+    function fleetRelease(vm) {
+        if (dead) throwFleetDead(ctorName, "release");
+        const i = vm !== null && typeof vm === "object" ? vm[STAMP] : undefined;
+        if (i === undefined || slots[i] !== vm) throwFleetForeign(ctorName);
+        if (!releaseReactive(vm)) throwFleetDoubleRelease(ctorName);
+        free[freeTop] = i;
+        freeTop = freeTop + 1;
+        return vm;
+    }
+
+    // HOT: bounds-checked slot read (live OR parked). `i >>> 0` folds negative and
+    // out-of-range into one unsigned compare.
+    function fleetAt(i) {
+        if (dead) throwFleetDead(ctorName, "at");
+        if ((i >>> 0) >= capacity) throwFleetRange(ctorName, i, capacity);
+        return slots[i];
+    }
+
+    function fleetSize() {
+        if (dead) throwFleetDead(ctorName, "size");
+        return capacity - freeTop;              // live = capacity - idle
+    }
+
+    // The fleet-owned registry always comes from createRegistry(), which always
+    // carries the stats ledger, so this is a straight pass-through.
+    function fleetStats() {
+        if (dead) throwFleetDead(ctorName, "stats");
+        return registry.stats();
+    }
+
+    // Dispose every member (live AND parked; disposeReactive on a parked member
+    // lands it DISPOSED), then destroy the registry. Idempotent: a second call
+    // no-ops. After dispose, every hot method fails closed via the `dead` guard.
+    function fleetDispose() {
+        if (dead) return;
+        dead = true;
+        for (let i = 0; i < capacity; i++) disposeReactive(slots[i]);
+        registry.destroy();
+    }
+
+    return {
+        registry,
+        Class,
+        capacity,
+        acquire: fleetAcquire,
+        release: fleetRelease,
+        at: fleetAt,
+        size: fleetSize,
+        stats: fleetStats,
+        dispose: fleetDispose,
+    };
+}
+
 function throwFlagArg(what) {
     throw new TypeError(`${ERR}${what}(on) -- on must be a boolean.`);
 }
@@ -2485,4 +2702,4 @@ export function auditReactive(on) {
 // --- Version ------------------------------------------------------------------
 
 /** Package version. Kept in lockstep with package.json and llms.txt. */
-export const VERSION = "1.4.0";
+export const VERSION = "1.5.0";

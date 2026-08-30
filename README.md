@@ -148,6 +148,7 @@ const ReactivePlayer = defineReactive(Player, {
 - **Interop that stays raw** -- `boxOf(vm, key)` hands you the live engine box; `rootOf(vm)` hands the anchor descriptor to `forEachOwned` / lite-devtools. Decorated and hand-written signals share one graph.
 - **Introspection & migration (1.3.0)** -- `forEachReactive(vm, fn, arg)` walks every value-bearing member in plan order (`signal`/`local`/`derived`, effects excluded) with a zero-alloc `fn(key, box, kind, arg)` callback; `snapshotOf(vm)` returns a shallow plain-object copy read through the accessors under one `untrack` -- the native `toJS` this package now ships, safe to call inside an effect.
 - **Live per-instance cost (1.4.0)** -- `costOfInstance(vm)` walks one wired instance's own graph and reports what it costs RIGHT NOW: `costOf(Factory)` answers "what will an instance of this class cost" (it forces every derived to the constructed ceiling), `costOfInstance` answers "what does THIS instance cost" -- an unforced lazy derived or an untaken branch shows fewer links until the graph is exercised, and reading every derived once makes the two agree exactly. Twin-free: it needs no stats() ledger, so it measures instances on hand-rolled registries where `costOf` fails closed.
+- **One-call pooled fleets (1.5.0)** -- `createFleet(inventory, bind, opts?)` composes the shipped primitives (`capacityFor` sizes the registry, `createRegistry` builds it, `releaseReactive`/`reinitReactive` park and revive) into one fixed-capacity fleet handle `{ registry, Class, capacity, acquire, release, at, size, stats, dispose }`. It EAGER-prefills and parks every member at construction, so `acquire(initials?)` never constructs -- it pops an `Int32Array` free-list and revives a parked member with ZERO allocation, and `release(vm)` parks it back after a per-fleet slot-stamp check. Six named fail-closed misuses (exhausted, foreign vm, double release, use-after-dispose, out-of-range `at`, bad `bind`); `dispose()` tears every member LIVE and PARKED plus the fleet-owned registry. The gamedev release: spawn/kill worlds and respawn-heavy scenes on a zero-GC steady state (decisions/0013 criterion (d) -- the demo's hand-rolled pool was deleted for it).
 
 ---
 
@@ -294,6 +295,28 @@ With labels and audit off, the zero-GC budgets are byte-identical to 0.3.0 -- th
 | `forEachReactive` | `(vm, fn, arg) => count` | Cold value-member walk. Calls `fn(key, box, kind, arg)` once per value-bearing member and returns the visit count. `kind` is `"signal" \| "local" \| "derived"`; `@reactiveEffect`/`@batched` are EXCLUDED (non-value-bearing). Order is PLAN order -- signals, then locals, then deriveds, each declaration-ordered and ancestor-first (never `Reflect.ownKeys`, so it is stable across reinit). Four scalar args, zero descriptor object, and the `arg` pass-through kills the caller's closure: the walk is a gated zero-alloc body. Symbol keys are visited. Fails closed on a non-reactive, unwired, parked, or disposed value with the same named errors as `rootOf`. |
 | `snapshotOf` | `(vm) => object` | A shallow plain-object copy of every value-bearing member, keyed by member key. Values are read through the ACCESSOR `vm[key]`, NOT `box.get`, so a `@localTo` compare-on-read resets honestly and a `@derived` computes on read (PD-62: reading the box directly would show a stale local after an untracked upstream move -- the accessor is the documented read). The whole walk runs under ONE `untrack` when the caller is tracking, so `snapshotOf` inside an effect subscribes to nothing. SHALLOW by design: a nested VM is copied by reference, not recursed. Symbol keys included. Fails closed on parked/disposed (`ReactiveDisposedError`, parked vs disposed flavor) and non-reactive values. This export ALLOCATES the returned object by design (~96 B/op measured) -- reported, never gated; the walk under it stays zero-alloc. |
 
+### Fleet (1.5.0)
+
+| Export | Signature | Behavior |
+|---|---|---|
+| `createFleet` | `(inventory, bind, opts?) => Fleet` | A fixed-capacity pool of reactive instances over the shipped primitives. COLD construction: `capacityFor(inventory, opts)` sizes a registry, `createRegistry` builds it, `bind(registry)` binds the caller's decorated class to it and returns it (the helper never wraps or redefines the class), then one member per inventory unit is EAGER-constructed and PARKED. The handle is `{ registry, Class, capacity, acquire(initials?), release(vm), at(i), size(), stats(), dispose() }`. HOT: `acquire` pops an `Int32Array` free-list and revives a parked member (`initials` override the reset values); `release` validates a per-fleet symbol slot stamp (a plain symbol-keyed integer field, NOT a WeakMap) and parks the member back. Both hot bodies allocate ZERO. Six named fail-closed misuses: `FleetExhaustedError` (acquire at capacity, pre-checked), `FleetForeignMemberError` (release of a vm this fleet never handed out), `FleetDoubleReleaseError` (release of an already-parked vm), `FleetDisposedError` (any call after `dispose()`), a `RangeError` (`at(i)` out of `[0, capacity)`), and a `TypeError` (a `bind` that is not a function or does not return a constructor). Construction is ATOMIC (a mid-prefill throw disposes what was built + destroys the registry). `dispose()` disposes every member LIVE and PARKED then destroys the fleet-owned registry. |
+
+The fleet is the demo's pool, extracted -- one call for a spawn/kill world:
+
+```js
+const fleet = createFleet([[Entity, 4096]], (reg) => {
+  @reactiveHost({ registry: reg })
+  class Bound extends Entity {}
+  return Bound;
+});
+const e = fleet.acquire({ x: 10, y: 20 });   // revive a parked member, zero alloc
+fleet.at(0);                                  // slot read (bounds-checked)
+fleet.release(e);                             // park it back; nodes return to the pool
+fleet.dispose();                              // every member + the registry torn down
+```
+
+`acquire` never constructs: all `capacity` members are built and parked at construction, so the steady state is allocation-free. That moves the construction cost to load (the demo pays ~7ms one-time to prefill 4096 members) in exchange for a zero-GC spawn/kill loop.
+
 ### Errors & constants
 
 | Export | Value |
@@ -404,6 +427,8 @@ The ~7 ns over raw batch is the guarded thunk + rest-array the decorator allocat
 
 `P + L + D + E + 1` pool nodes -- one per signal, per local, per derived, per effect, plus the anchor. All of them return to the pool on dispose: conservation is node-exact (`activeNodes` to baseline, zero pool growths, allocations minus disposals reconciled) over 4096-cycle churn and a wall-clock soak.
 
+**`createFleet` acquire/release (1.5.0).** The fleet's hot loop measures **1.649 B/cyc** at 8N against a **0.234 B/cyc** in-process zero-alloc control (a +2 limit); `gc.major 0`, 2 minors against a limit of 129, `maxPauseMs 0.36`. A `release(vm)` frees exactly `P + L + D + E + 1` nodes -- on the demo `Entity` shape that is a **-8** `activeNodes` delta per release. 1000 fleet lifecycles at N=512 return `activeNodes` to the exact baseline with `poolGrowths` 0, and the lane's `TORTURE_BREAK` control catches a leaky variant at 42.881 B/cyc.
+
 <details>
 <summary><strong>Zero-GC design notes: the allocation table + the gates</strong></summary>
 
@@ -420,12 +445,13 @@ The ~7 ns over raw batch is the guarded thunk + rest-array the decorator allocat
 | `forEachReactive` walk | none | gated: 1e6 hoisted-callback walks measure **0.002 B/walk** (vs the 0.000 B/op zero-alloc control -- within a +2-byte limit), `gc.major === 0`; the 4-scalar `fn(key, box, kind, arg)` carries no descriptor object and the `arg` pass-through kills the caller's closure |
 | `snapshotOf(vm)` | 1 plain object | **by design** -- the returned copy allocates (**95.8 B/op measured**, 1e5 cycles); REPORTED in the torture summary line, never gated. The walk *under* it stays zero-alloc; cold, off any frame path |
 | `costOfInstance(vm)` | 1 frozen object | **by design** -- the per-call frozen result allocates (**71.3 B/op measured**, 1e4 calls); the measurement itself is `gc.major === 0` over those 1e4 calls -- REPORTED, never gated. The graph walk *under* it allocates nothing (module-slot visitors, no per-call closure); cold, off any frame path |
+| `fleet.acquire` / `fleet.release` | none | gated: the fleet's hot loop measures **1.649 B/cyc** at 8N (vs a 0.234 B/cyc zero-alloc control, +2 limit), `gc.major 0`, `maxPauseMs 0.36`; `acquire` pops an `Int32Array` free-list + revives a parked member, `release` parks it after a symbol-slot-stamp check -- no WeakMap, no per-call closure |
 
-The gates that hold it (run on every change, all green at 1.4.0):
+The gates that hold it (run on every change, all green at 1.5.0):
 
-- `npm test` / `npm run test:gc` -- **335/335** on both lanes.
+- `npm test` / `npm run test:gc` -- **372/372** on both lanes.
 - Suite gate (lite-leak + lite-gc-profiler): `leak=size 0/0 findings=0 warnings=0 | gc major=0 minor=0 maxMs=0.00 | ok`.
-- Torture: **18 scenarios** (zero-GC read/write lanes at `maxMajor 0, maxPauseMs 4`; 4096-cycle leak gate at 0 live / 0 findings / 0 warnings; capacity atomicity at every overflow point; a 300-seed x 20k-op oracle with zero divergences; the `reinit-torture` acquire/release gate; the `localto-torture` zero-alloc read/write storm + ABA-stale interleave lattice + pooled park/reinit; the `introspection-torture` 1e6 hoisted-callback `forEachReactive` walk at `maxMajor 0` with the snapshot-allocates figure reported, never gated) -- **16 run + 2 that skip correctly below their peer floors** (`scope-adoption` needs 1.6.0, `using-dispose` needs 1.9.0; the installed peer is 1.5.0). A skip *below* a floor is the forward-compat design working; a skip *at or above* it is a FAIL (run.mjs enforces floor-escalation). Every scenario carries a `TORTURE_BREAK` sabotage control that must exit non-zero -- **18/18 controls** prove each gate can actually fail.
+- Torture: **19 scenarios** (zero-GC read/write lanes at `maxMajor 0, maxPauseMs 4`; 4096-cycle leak gate at 0 live / 0 findings / 0 warnings; capacity atomicity at every overflow point; a 300-seed x 20k-op oracle with zero divergences; the `reinit-torture` acquire/release gate; the `localto-torture` zero-alloc read/write storm + ABA-stale interleave lattice + pooled park/reinit; the `introspection-torture` 1e6 hoisted-callback `forEachReactive` walk at `maxMajor 0` with the snapshot-allocates figure reported, never gated; the `fleet-torture` 4096 acquire/release cycles at zero-alloc budgets + 1000 lifecycles to exact baseline) -- **17 run + 2 that skip correctly below their peer floors** (`scope-adoption` needs 1.6.0, `using-dispose` needs 1.9.0; the installed peer is 1.5.0). A skip *below* a floor is the forward-compat design working; a skip *at or above* it is a FAIL (run.mjs enforces floor-escalation). Every scenario carries a `TORTURE_BREAK` sabotage control that must exit non-zero -- **19/19 controls** prove each gate can actually fail.
 - `churn-soak` + `fleet-soak`: sustained construct/use/dispose and a 10s 2k-VM fleet tick; pools at floor and retained heap flat at every sample.
 
 The cross-framework matrix lives in `bench/` (private, never shipped): six engines -- both our tiers, the hand-written `lite-raw-boxes` baseline, MobX 7, signal-utils/signal-polyfill, and a hand-rolled alien-signals class -- across eight class-shaped scenarios (including the `churn-reuse` acquire/release lane, where the lite tiers pool with zero retained growth and MobX/signal-utils/alien-class are structurally `unsupported` -- no disposable instance lifecycle to pool), checksum-verified for identical work, stamped into `bench/results.txt`. The formal verdicts are in [`decisions/0006-kill-criteria.md`](decisions/0006-kill-criteria.md): the decorated path measured **0.94x** the hand-written baseline on vm-write and **1.10x** on a 10k-instance fleet read (the 2.0x kill line cleared with margin), and **0 major + 0 minor GC over 4096 construct/use/dispose cycles** with pools at floor -- while emitting ~12.6x less transient garbage per churn run than the hand-rolled class it replaces.
@@ -457,12 +483,12 @@ Full rationale lives in [`decisions/`](decisions/) -- each is a numbered, dated 
 ## Testing (for clients & QA)
 
 ```bash
-npm test            # node --test, 335 tests
-npm run test:gc     # the same 335 with --expose-gc (enables the allocation assertions)
+npm test            # node --test, 372 tests
+npm run test:gc     # the same 372 with --expose-gc (enables the allocation assertions)
 npm run gate        # the full pre-publish chain (section 10): fixtures -> test -> test:gc -> torture -> controls -> peer-preview (non-blocking) -> bench selftest -> cookbook -> pack
 ```
 
-**335 tests** across nineteen files, all green at 1.4.0. The decorator protocol is tested three times over: against a mock standard-decorators emitter *and* against committed real TypeScript 5 and Babel `2023-11` emits, so both toolchains' codegen is pinned, not assumed.
+**372 tests** across twenty files, all green at 1.5.0. The decorator protocol is tested three times over: against a mock standard-decorators emitter *and* against committed real TypeScript 5 and Babel `2023-11` emits, so both toolchains' codegen is pinned, not assumed.
 
 | File | Tests | Covers |
 |---|---:|---|
@@ -480,11 +506,12 @@ npm run gate        # the full pre-publish chain (section 10): fixtures -> test 
 | `12-accounting` | 11 | `costOf` node/link/shape grid (double-probe, frozen + cached, fail-closed) + `capacityFor` budget sizing |
 | `13-labels-audit` | 10 | `enableLabels`/`labelOf` per-registry identity + `auditReactive` leak reporting, both opt-in and default-OFF |
 | `14-qa-s4-boundary` | 21 | S4 adversarial edges: stats-less facade closure, signals-only capacity floor, label/audit boundary matrix |
-| `15-cookbook` | 14 | [`COOKBOOK.md`](https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md) drift/parity: each fenced block byte-compared against its tagged companion `#region` (both directions + both-way coverage), surface freeze (exactly 22 exports), citation allowlist, link law, static-cost probe, and the four-place VERSION sync (module const === package.json === llms.txt === `SignalDecorators.d.ts` literal) |
+| `15-cookbook` | 14 | [`COOKBOOK.md`](https://github.com/PeshoVurtoleta/lite-signal-decorators/blob/main/COOKBOOK.md) drift/parity: each fenced block byte-compared against its tagged companion `#region` (both directions + both-way coverage), surface freeze (exactly 23 exports), citation allowlist, link law, static-cost probe, and the four-place VERSION sync (module const === package.json === llms.txt === `SignalDecorators.d.ts` literal) |
 | `16-reinit` | 29 | Pooled-reinit lattice on both emit lanes: park/reinit/dispose transitions, the five `reinitReactive` fail-closed states, parked-touch throws by name, `initials` boundary matrix (0..N+1 keys, null/undefined, NaN/-0 verbatim), `Symbol.dispose` on a parked instance, accessor descriptors byte-identical across reinit, self-release re-entrancy, ledger conservation |
 | `17-localto` | 34 | `@localTo` on both emit lanes + buildless `locals`: the read/write/upstream-reset lattice, both initial flavors (follow-from-wiring vs reset-from-initial), the ABA stale-local contract, `equals` override survival, park/reinit box+seen reset, `costOf` = P+L+D+E+1, source-throw fail-closed, and the fail-closed option/source matrix |
 | `18-introspection` | 22 | `forEachReactive`/`snapshotOf` on both emit lanes + buildless: plan-order walk (signals, locals, deriveds; ancestor-first), symbol keys, the `signal`/`local`/`derived` kind tags, effect/batched exclusion, count return + `arg` pass-through, the untracked-read law (snapshotOf inside an effect fires once), r7 `{name,hp,mp,alive}` parity, the PD-62 accessor-read reset honesty, and the fail-closed non-reactive/unwired/parked/disposed matrix |
 | `19-cost-instance` | 22 | `costOfInstance` on both emit lanes + buildless: A1 parity-when-forced (=== `costOf`, nodes/links/every kind count), A2 delta-when-lazy (links strictly lower, then monotonic toward the forced number), `@localTo` counted in locals with zero graph links, the frozen `{nodes,links,signals,locals,deriveds,effects}` shape, A3 registry-untouched over 10000 calls, PD-72 bound-registry + stats-less-facade measurement (where `costOf` fails closed), PD-70 uncached/live across a branch flip, and the A6 fail-closed matrix (plain/unwired/parked/disposed each a NAMED throw, never a `{nodes:0}` report) |
+| `20-fleet` | 37 | `createFleet` on both emit lanes + a buildless class: the `{registry,Class,capacity,acquire,release,at,size,stats,dispose}` handle surface, eager-prefill (all members parked at construction, `acquire` never constructs), `initials` pass-through, the six fail-closed misuses (exhausted/foreign/double-release/use-after-dispose/`at` out-of-range/bad `bind`), atomic mid-prefill cleanup, `dispose()` tearing live AND parked members plus the registry, and the 22 -> 23 export-count freeze |
 
 ### Emit-support matrix
 
@@ -542,6 +569,8 @@ npm run demo:storm          # headless dispose-storm retention lane (lite-leak, 
 ```
 
 Since 1.4.0 the console is the named consumer of `costOfInstance`: its shape-drift wall measures a real live `Entity` (its node count === the `EntityShape` sizing twin's) and the HUD reports one live fleet member's `costOfInstance` per HUD tick, so the live-vs-`costOf` delta -- a forced ceiling against the lazy live cost -- is visible on screen. The `EntityShape` twin stays for `capacityFor` sizing only (the world must be sized before it exists).
+
+Since 1.5.0 the demo's hand-rolled pool IS `createFleet`: the spawn/kill plumbing (the slot array, free-list, count, and dispose-storm bodies) was DELETED in favor of one fleet handle, and `step`/`readPositions` read members through `fleet.at(i)`. The diff went net-negative -- the demo is the named consumer that admitted the helper (decisions/0013 criterion (d)). The eager prefill moves construction to load (~7ms one-time for 4096 members), the honest cost of a zero-alloc steady state.
 
 The `demo/` directory is dev-only -- it never enters `package.json` `files[]` and never ships to consumers.
 

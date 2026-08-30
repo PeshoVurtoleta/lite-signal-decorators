@@ -11,7 +11,7 @@ export {
     spawn,
     kill,
     step,
-    disposeStorm,
+    parkStorm,
     population,
     nodesPerVm,
     worldStats,

@@ -12,6 +12,7 @@ import type {
     NodeDescriptor,
     Registry,
     RegistryConfig,
+    RegistryStats,
     ReactiveHandle,
     EffectScheduler,
 } from "@zakkster/lite-signal";
@@ -480,6 +481,70 @@ export function capacityFor(
     options?: CapacityForOptions,
 ): RegistryConfig;
 
+// --- createFleet --------------------------------------------------------------
+
+/** Options for {@link createFleet}. Forwarded to {@link capacityFor}. */
+export interface CreateFleetOptions {
+    /** Link-budget multiplier (`>= 1`, default `1` = exact). See {@link CapacityForOptions.headroom}. */
+    headroom?: number;
+}
+
+/**
+ * A fixed-capacity pool of reactive instances built by {@link createFleet}. Owns
+ * its registry; `dispose()` tears both members and registry down.
+ */
+export interface Fleet<T extends object = object> {
+    /** The fleet-owned `Registry` the members are bound to. */
+    readonly registry: Registry;
+    /** The bound class `bind(registry)` returned; every member is an instance of it. */
+    readonly Class: new (...args: any[]) => T;
+    /** The fixed member ceiling (sum of the inventory counts), sized eagerly at construction. */
+    readonly capacity: number;
+    /**
+     * Revive a parked member and return it. `initials` overrides its reset values
+     * (undefined = the plan's initials). Zero allocation.
+     * @throws a named `FleetExhaustedError` when all `capacity` members are live.
+     * @throws a named `FleetDisposedError` after `dispose()`.
+     */
+    acquire(initials?: Record<PropertyKey, unknown>): T;
+    /**
+     * Park a member back into the pool. Zero allocation.
+     * @throws a named `FleetForeignMemberError` if `vm` was not acquired from this fleet.
+     * @throws a named `FleetDoubleReleaseError` if `vm` is already parked.
+     * @throws a named `FleetDisposedError` after `dispose()`.
+     */
+    release(vm: T): T;
+    /**
+     * The member in slot `i` (live or parked).
+     * @throws a `RangeError` if `i` is out of `[0, capacity)`.
+     * @throws a named `FleetDisposedError` after `dispose()`.
+     */
+    at(i: number): T;
+    /** The live member count (`capacity` minus parked). */
+    size(): number;
+    /** The fleet-owned registry's stats ledger, passed through. */
+    stats(): RegistryStats;
+    /** Dispose every member (live and parked) and destroy the registry. Idempotent. */
+    dispose(): void;
+}
+
+/**
+ * Build a fixed-capacity {@link Fleet} of reactive instances over the shipped
+ * primitives: `capacityFor(inventory, opts)` sizes a registry, `createRegistry`
+ * builds it, `bind(registry)` binds the caller's decorated class to it and returns
+ * it, then one member per inventory unit is EAGER-constructed and parked (acquire
+ * never constructs). The returned handle acquires/releases members with zero
+ * allocation and fails closed (named throws) on every misuse.
+ *
+ * @throws {TypeError} if `bind` is not a function or does not return a constructor.
+ * @throws if `inventory`/`opts` are invalid (via {@link capacityFor}).
+ */
+export function createFleet<T extends object = object>(
+    inventory: InventoryEntry[],
+    bind: (registry: Registry) => new (...args: any[]) => T,
+    opts?: CreateFleetOptions,
+): Fleet<T>;
+
 /**
  * Toggle devtools labels (default OFF). While ON, wiring registers a
  * `nodeId -> label` for every node an instance creates (`"Class.prop"`,
@@ -531,4 +596,4 @@ export class ReactiveDisposedError extends Error {
 // --- Version ------------------------------------------------------------------
 
 /** Package version. Kept in lockstep with package.json and llms.txt. */
-export const VERSION: "1.4.0";
+export const VERSION: "1.5.0";

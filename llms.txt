@@ -1,6 +1,6 @@
 # @zakkster/lite-signal-decorators
 
-VERSION 1.4.0
+VERSION 1.5.0
 
 > Standard-decorators layer over @zakkster/lite-signal, built on the TC39
 > decorators proposal (Stage 2.7 since 2026-05; TS 5.x / Babel 2023-11 emit
@@ -22,7 +22,7 @@ zero decorator syntax, sharing the SAME core by function identity.
 slot for a poison handle, so any later read/write throws a named
 `ReactiveDisposedError`.
 
-## Exports (22)
+## Exports (23)
 
 - `reactive` -- `@reactive accessor x = v` (bare) or `@reactive({ equals })`
   (factory). Declares a per-instance signal.
@@ -135,6 +135,33 @@ slot for a poison handle, so any later read/write throws a named
 - `capacityFor(inventory, { headroom }?) -> RegistryConfig` -- size a
   `createRegistry` config from `[Factory, count]` pairs. Nodes exact, links x
   `headroom` (default 1). Fail-closed inventory validation.
+- `createFleet(inventory, bind, opts?) -> Fleet` -- the flagship-audience fleet
+  helper over the shipped primitives (`capacityFor` + `createRegistry` +
+  park/reinit; decisions/0013 criterion (d)). COLD construction sizes a registry
+  from `inventory`, builds it, hands it to `bind(registry)` (the caller binds its
+  decorated class to that registry and returns it -- the helper never wraps or
+  redefines the class), then EAGER-constructs and PARKS one member per inventory
+  unit. Returns a handle `{ registry, Class, capacity, acquire(initials?),
+  release(vm), at(i), size(), stats(), dispose() }`. Import in the exports block:
+  `import { createFleet } from "@zakkster/lite-signal-decorators"`. LAWS: eager
+  prefill is done at construction -- `acquire` never constructs, it pops a
+  free-list and `reinitReactive`s a parked member (`initials` override the reset
+  values); `release` validates a per-fleet slot stamp and `releaseReactive`s the
+  member back to the pool. Both hot bodies allocate ZERO (a slot array + an
+  `Int32Array` free-list + a per-vm symbol slot stamp -- never a WeakMap). SIX
+  named fail-closed misuses: `acquire` at capacity throws `FleetExhaustedError`
+  (pre-checked; the registry's own `CapacityError` is unreachable, all N are
+  prealloc'd); `release` of a foreign vm throws `FleetForeignMemberError` (the
+  slot stamp is the check); a double release throws `FleetDoubleReleaseError`;
+  any call after `dispose()` throws `FleetDisposedError`; `at(i)` out of
+  `[0, capacity)` throws a `RangeError`; a `bind` that is not a function or does
+  not return a constructor throws a `TypeError`. Construction is ATOMIC: any
+  mid-prefill throw disposes the already-built members and destroys the registry
+  before rethrowing. `dispose()` disposes every member LIVE AND PARKED (park ->
+  dispose lands DISPOSED), then destroys the fleet-owned registry -- parked
+  members are disposed too, not leaked. `null` is not zero at any gate. The demo's
+  hand-rolled pool is the extracted spec (its diff went net-negative when the
+  helper replaced it).
 - `enableLabels(on)` / `labelOf(idOrHandle, registry?) -> string | undefined` --
   opt-in devtools labels (default OFF); per-registry `nodeId -> "Class.prop" /
   "Class#method" / "Class@anchor"`.
@@ -142,7 +169,7 @@ slot for a poison handle, so any later read/write throws a named
   `FinalizationRegistry` reports any instance GC'd without `disposeReactive`.
 - `ReactiveDisposedError` -- `extends Error`, `name` `"ReactiveDisposedError"`,
   fields `className` and `key`.
-- `VERSION` -- `"1.4.0"`.
+- `VERSION` -- `"1.5.0"`.
 
 ## Registry law (one registry per host chain)
 
@@ -288,7 +315,10 @@ and pays its own measured cost. 1.3.0 adds `forEachReactive` + `snapshotOf`
 named in-package consumer that admits `forEachReactive` under the 0009 bar, and
 the 1.0.0 canon stays byte-identical. 1.4.0 adds `costOfInstance` (decisions/0013
 criterion (b); the demo is the named consumer) as an additive MINOR -> 22
-exports; the 1.0.0 canon stays byte-identical. The semver promise from here: any change to an existing export's
+exports; the 1.0.0 canon stays byte-identical. 1.5.0 adds `createFleet`
+(decisions/0013 criterion (d); the demo fleet is the named consumer, its
+hand-rolled pool DELETED for the helper) as an additive MINOR -> 23 exports --
+the 0013 ladder CLOSES at 23; the 1.0.0 canon stays byte-identical. The semver promise from here: any change to an existing export's
 signature or behavior is a MAJOR, recorded in a decision file; new exports are
 minors; the hot accessor canon (`makeGet`/`makeSet`) does not move without a
 major. Also present since

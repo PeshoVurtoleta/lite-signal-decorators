@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<meta name="description" content="A live reactive-class fleet driven by the real source of @zakkster/lite-signal-decorators: an enforced-capacity custom registry, per-instance dispose, zero per-frame allocation, and lite-watch-ex telemetry on a separate plane.">
+<meta name="description" content="A live reactive-class fleet driven by the real source of @zakkster/lite-signal-decorators: an enforced-capacity custom registry, pooled park/release, zero per-frame allocation, and lite-watch-ex telemetry on a separate plane.">
 <title>lite-signal-decorators - fleet playground</title>
 </head>
 <body>
@@ -244,7 +244,7 @@
             <h2>Fleet viewport (Plane A)</h2>
             <canvas id="scene" width="960" height="600"></canvas>
             <p class="legend">
-                <span><i class="dot fleet"></i>fleet entity (custom registry, per-instance dispose)</span>
+                <span><i class="dot fleet"></i>fleet entity (custom registry, pooled park/release)</span>
                 <span><i class="dot tel"></i>telemetry driven by lite-watch-ex (default registry)</span>
             </p>
         </section>
@@ -267,7 +267,7 @@
                         <button class="btn" id="btnPause" type="button">pause</button>
                     </div>
                     <div class="row">
-                        <button class="btn danger" id="btnStorm" type="button">dispose storm</button>
+                        <button class="btn danger" id="btnStorm" type="button">park storm</button>
                     </div>
                 </div>
                 <div class="alert" id="tAlert">capacity alert armed (watchUntil, one-shot)</div>

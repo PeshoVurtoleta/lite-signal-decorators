@@ -13,7 +13,7 @@ import {
     spawn,
     kill,
     step,
-    disposeStorm,
+    parkStorm,
     population,
     worldStats,
     firstMemberCost,
@@ -154,7 +154,7 @@ $btnKill.addEventListener("click", () => {
 });
 
 $btnStorm.addEventListener("click", () => {
-    disposeStorm();
+    parkStorm();
     $tAlert.classList.remove("err");
 });
 

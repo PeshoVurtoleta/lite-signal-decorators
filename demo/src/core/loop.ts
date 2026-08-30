@@ -5,20 +5,21 @@
 // lite-gc-profiler (PD-31: the core loop is an engine-shaped module, so any
 // behavior the node lane cannot reach is a design smell, not an excuse).
 //
-// Two-plane law (PD-30): every decorated Entity VM lives on `world`, a CUSTOM
-// registry sized EXACTLY by capacityFor. Plane B (telemetry.ts) owns its own
+// Two-plane law (PD-30): every decorated Entity VM lives on the fleet's CUSTOM
+// registry, sized EXACTLY by capacityFor. Plane B (telemetry.ts) owns its own
 // default-registry signals; no telemetry watcher ever reads a Plane A member.
 //
-// Bootstrap note (the capacityFor cycle): a decorated class binds its registry
-// at decoration time, so the fleet class cannot also be the class capacityFor
-// probes to SIZE that registry -- the registry would not exist yet. Resolved the
-// package's own probe-then-host idiom (test/14 QA-B1, line 101: an unbound twin's
-// cost sizes a registry that then hosts the bound class; Cluster E, line 209,
-// asserts decorator/twin cost parity): a defineReactive measurement twin
-// `EntityShape` of identical shape is probed on the default registry to size
-// `world`; the decorated `Entity` is then bound to `world`. A boot shape-drift
-// assertion (assertShapeAgrees) fails closed if the two ever diverge, so the
-// twin can never silently misreport the fleet's real per-instance cost.
+// The pool is the SHIPPED helper (S11): createFleet sizes a registry from the
+// sizing twin's cost, binds the decorated Entity to it, and EAGER-prefills N_MAX
+// parked members (PD-75: acquire never constructs). This module used to hand-roll
+// that pool -- the helper is the extracted spec, so spawn/kill/storm are now
+// fleet.acquire/release and the demo keeps only its live-checkout list.
+//
+// The sizing twin (EntityShape) exists because a decorated class binds its
+// registry at decoration time, so the fleet's Entity cannot ALSO be the class
+// capacityFor probes to size that registry -- it does not exist until createFleet
+// builds it. A defineReactive twin of identical shape sizes the inventory;
+// assertShapeAgrees() fails closed if a live Entity ever diverges from it.
 //
 // ASCII-only. Comparisons use -> <= x in prose. No Unicode.
 
@@ -28,29 +29,20 @@ import {
     reactiveEffect,
     reactiveHost,
     defineReactive,
-    disposeReactive,
-    capacityFor,
     costOf,
     costOfInstance,
+    createFleet,
 } from "../../../SignalDecorators.js";
 import type { ReactiveCost } from "../../../SignalDecorators.js";
-import { createRegistry } from "@zakkster/lite-signal";
 
 // --- fleet geometry -----------------------------------------------------------
 
 // N_MAX: the enforced ceiling. 4096 == 2^12 -- a power of two comfortably above
 // the gc-lane's standing fleet (N=2000) and the storm lane (N=512), and low
-// enough that the UI can actually spill past it to surface the engine's named
-// CapacityError (shown, never swallowed). At P=4 D=2 E=1 that is 8 nodes/VM ->
-// world provisions exactly 8 x 4096 == 32768 pool nodes, eagerly.
+// enough that the UI can actually spill past it to surface the fleet's named
+// FleetExhaustedError (shown, never swallowed). At P=4 D=2 E=1 that is 8
+// nodes/VM -> the fleet provisions exactly 8 x 4096 == 32768 pool nodes, eagerly.
 export const N_MAX = 4096;
-
-// --- Entity shape, single source of the field list ----------------------------
-//
-// The measurement twin and the decorated fleet class share this field list by
-// construction: both declare x/y/vx/vy signals, speed/load deriveds, and one
-// effect. assertShapeAgrees() below proves the decorated class matches the
-// twin's measured cost at boot.
 
 // Module-level liveness witness. The effect body bumps it WITHOUT closing over
 // any instance (it reads `this.speed` and touches only this module-scoped let).
@@ -63,15 +55,9 @@ export function effectFires(): number {
 }
 
 // The measurement twin: identical shape, on the DEFAULT registry, used ONLY to
-// size `world`. Constructed once by capacityFor's costOf probe, then never
-// instantiated again. deriveds are FIXED-shape (each reads the same members
-// every time regardless of value), so capacityFor provisions exactly.
-//
-// The twin's REMAINING job is sizing ONLY (0009 candidate 4 -> v1.4.0): the
-// world registry must be provisioned BEFORE any real Entity can exist, and
-// costOf cannot take ctor args, so a twin is still the only way to size upfront.
-// The shape-drift wall below is no longer twin-vs-twin -- it is now a LIVE
-// measurement of a real Entity via costOfInstance.
+// size the fleet's inventory (createFleet -> capacityFor takes the twin+count).
+// deriveds are FIXED-shape (each reads the same members every time regardless of
+// value), so capacityFor provisions exactly. Never instantiated by the fleet.
 const EntityShape = defineReactive(class EntityShape {}, {
     signals: { x: 0, y: 0, vx: 0, vy: 0 },
     deriveds: {
@@ -83,68 +69,81 @@ const EntityShape = defineReactive(class EntityShape {}, {
     },
 });
 
-// Size the enforced registry from the twin. capacityFor emits
-// { maxNodes, maxLinks, prealloc: "eager", onCapacityExceeded: "throw" }.
-const WORLD_CONFIG = capacityFor([[EntityShape, N_MAX]]);
-
-// Plane A -- the FLEET registry. Enforced capacity; a spawn past N_MAX throws
-// the engine's named CapacityError at node formation.
-export const world = createRegistry(WORLD_CONFIG);
-
 // Per-VM node cost, straight from the twin's measured cost -- the exact floor a
-// single Entity must occupy on `world`.
+// single Entity must occupy on the fleet's registry.
 const NODES_PER_VM = costOf(EntityShape).nodes;
 
-// --- the decorated fleet VM ---------------------------------------------------
-//
-// Real Stage-3 decorators (experimentalDecorators: false), bound to `world`.
-// FIXED-shape: speed always reads vx+vy, load always reads x+y, the effect
-// always tracks speed. No branchy derived -> capacityFor provisions exactly.
-
-@reactiveHost({ registry: world })
-export class Entity {
-    @reactive accessor x = 0;
-    @reactive accessor y = 0;
-    @reactive accessor vx = 0;
-    @reactive accessor vy = 0;
-
-    @derived get speed() { return Math.abs(this.vx) + Math.abs(this.vy); }
-    @derived get load() { return this.x + this.y; }
-
-    // Auto-effect: fires once at wire, re-fires whenever speed's deps move.
-    @reactiveEffect tick() { effectFireCount++; void this.speed; }
+/** Shape of one live fleet member -- the type the fleet hands out. */
+export interface Entity {
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    readonly speed: number;
+    readonly load: number;
 }
 
-// Shape-drift wall -- now a LIVE measurement (0009 candidate 4 -> v1.4.0):
-// construct one real Entity, FORCE each derived once so the instance reports the
-// constructed CEILING (costOfInstance is parity-with-costOf once every lazy
-// derived has been read -- nodes agree regardless, links only after forcing),
-// measure its true per-VM cost with costOfInstance, and prove nodes equal the
-// twin's costOf number. If the decorated class and the twin ever diverge,
-// capacityFor would under- or over-provision `world`; fail closed here rather
-// than let the fleet run mis-sized. Cold boot path only -- costOfInstance
-// allocates its frozen result, so it never rides a frame.
+// --- the fleet ----------------------------------------------------------------
+//
+// createFleet sizes a registry from [[EntityShape, N_MAX]], hands it to bind()
+// so the caller binds its decorated class to it (PD-76: the helper never wraps
+// or redefines the class), then EAGER-constructs and parks N_MAX members. The
+// decorator wiring is IDENTICAL to the old hand-rolled class: real Stage-3
+// decorators (experimentalDecorators: false), FIXED-shape (speed always reads
+// vx+vy, load always reads x+y, the effect always tracks speed).
+export const fleet = createFleet<Entity>([[EntityShape, N_MAX]], (registry) => {
+    @reactiveHost({ registry })
+    class EntityHost {
+        @reactive accessor x = 0;
+        @reactive accessor y = 0;
+        @reactive accessor vx = 0;
+        @reactive accessor vy = 0;
+
+        @derived get speed() { return Math.abs(this.vx) + Math.abs(this.vy); }
+        @derived get load() { return this.x + this.y; }
+
+        // Auto-effect: fires once at wire, re-fires whenever speed's deps move.
+        @reactiveEffect tick() { effectFireCount++; void this.speed; }
+    }
+    return EntityHost;
+});
+
+/** The bound fleet VM constructor (== fleet.Class). */
+export const Entity = fleet.Class;
+
+/** The Plane A registry the fleet owns (== fleet.registry). */
+export const world = fleet.registry;
+
+// Shape-drift wall -- a LIVE measurement: acquire one real member, FORCE each
+// derived once so the instance reports the constructed CEILING (costOfInstance
+// is parity-with-costOf once every lazy derived has been read), measure its true
+// per-VM cost with costOfInstance, and prove nodes equal the twin's costOf
+// number. If the decorated class and the twin ever diverge, capacityFor would
+// under- or over-provision the registry; fail closed here. Cold boot path only.
 function assertShapeAgrees(): void {
-    const probe = new Entity();
+    const probe = fleet.acquire();
     void probe.speed;                       // force the deriveds -> ceiling numbers
     void probe.load;
     const live = costOfInstance(probe);
-    disposeReactive(probe);
+    fleet.release(probe);
     if (live.nodes !== NODES_PER_VM) {
         throw new Error(
             "loop.ts shape drift: a live Entity measures " + live.nodes +
             " nodes but the measurement twin sized " + NODES_PER_VM +
-            " -- capacityFor provisioned world for the wrong shape.",
+            " -- capacityFor provisioned the fleet for the wrong shape.",
         );
     }
 }
 assertShapeAgrees();
 
-// --- the live fleet -----------------------------------------------------------
-
-// Fixed-length slot array, sized to the ceiling. `count` is the live population.
-// null in a slot means empty. No per-step allocation touches this array.
-const slots: Array<Entity | null> = new Array(N_MAX).fill(null);
+// --- the live checkout list ---------------------------------------------------
+//
+// The fleet owns construction, parking, the free-list, and capacity. The demo
+// owns only this dense stack of currently-acquired members: spawn pushes an
+// acquired VM, kill/storm pop and release in LIFO order. step/readPositions
+// iterate [0, count) with direct indexing -- no per-frame allocation, no
+// dependence on the fleet's internal slot ordering. `count` mirrors fleet.size().
+const live: Array<Entity | null> = new Array(N_MAX).fill(null);
 let count = 0;
 
 // Deterministic, allocation-free PRNG (xorshift32) for spawn jitter so both the
@@ -159,74 +158,74 @@ function rng(): number {
     return (x >>> 0) / 4294967296;
 }
 
-/** Live population. */
-export function population(): number { return count; }
+/** Live population (== fleet.size()). */
+export function population(): number { return fleet.size(); }
 
 /** Per-VM pool-node cost (P+D+E+1). */
 export function nodesPerVm(): number { return NODES_PER_VM; }
 
 /** The Plane A registry stats snapshot (activeNodes/activeLinks/poolGrowths/
  *  ledger). Read-only; reading stats forms no graph edge. */
-export function worldStats() { return world.stats(); }
+export function worldStats() { return fleet.stats(); }
 
 /**
  * costOfInstance of the first live fleet member -- the LIVE measured cost of one
- * real Entity on `world` right now (not the twin's ceiling). A live member's
- * `load` derived is never read, so its links read BELOW the forced ceiling: the
- * documented live-vs-probe delta, surfaced in the HUD. COLD: the frozen result
- * allocates one object per call, so the HUD must call this on its tick cadence
- * only, NEVER per frame. Returns null when the fleet is empty. Slots [0, count)
- * are dense, so slot 0 is always a live member whenever count > 0.
+ * real Entity right now (not the twin's ceiling). A live member's `load` derived
+ * is never read, so its links read BELOW the forced ceiling: the documented
+ * live-vs-probe delta, surfaced in the HUD. COLD: the frozen result allocates
+ * one object per call, so the HUD must call this on its tick cadence only, NEVER
+ * per frame. Returns null when the fleet is empty.
  */
 export function firstMemberCost(): Readonly<ReactiveCost> | null {
     if (count === 0) return null;
-    return costOfInstance(slots[0] as Entity);
+    return costOfInstance(live[0] as Entity);
 }
 
 /**
- * Spawn `n` entities into free slots. Spawning past N_MAX lets the engine's
- * CapacityError propagate to the caller (shown, never swallowed) -- construction
- * is atomic (D-2h), so a failed spawn leaks no nodes. Returns the new population.
+ * Spawn `n` entities: acquire a parked member per unit and jitter its position.
+ * Acquiring past N_MAX lets the fleet's named FleetExhaustedError propagate to
+ * the caller (shown, never swallowed) -- acquire never constructs, so a failed
+ * acquire leaks nothing. Returns the new population.
  */
 export function spawn(n: number): number {
     for (let i = 0; i < n; i++) {
-        const e = new Entity();            // throws CapacityError at the ceiling
+        const e = fleet.acquire();         // throws FleetExhaustedError at the ceiling
         e.x = rng() * 1000;
         e.y = rng() * 1000;
         e.vx = rng() * 2 - 1;
         e.vy = rng() * 2 - 1;
-        slots[count] = e;
+        live[count] = e;
         count = count + 1;
     }
     return count;
 }
 
 /**
- * Kill the top `n` live entities via node-exact teardown. Returns the new
- * population. Disposing more than are live simply drains to empty.
+ * Kill the top `n` live entities: release each back to the pool (nodes returned,
+ * member parked). Returns the new population. Killing more than are live simply
+ * drains to empty.
  */
 export function kill(n: number): number {
     let k = n > count ? count : n;
     for (let i = 0; i < k; i++) {
         count = count - 1;
-        const e = slots[count];
-        if (e !== null) disposeReactive(e);
-        slots[count] = null;
+        fleet.release(live[count] as Entity);
+        live[count] = null;
     }
     return count;
 }
 
 /**
- * Dispose storm: mass teardown of the entire live fleet in one pass. Each Entity
- * also supports `using` (Symbol.dispose === disposeReactive), so a `using`-block
- * teardown is byte-identical to this loop; the loop form is used here for a
- * deterministic, allocation-free storm the node lane can gate. Returns 0.
+ * Park storm: mass release of the entire live fleet in one pass, returning every
+ * member's nodes to the pool (parked, not disposed -- the fleet only disposes at
+ * teardown). Mirrors the hand-rolled storm's measured intent -- population drops
+ * to 0 and activeNodes returns to the parked baseline. Allocation-free; the node
+ * lane can gate it. Returns 0.
  */
-export function disposeStorm(): number {
+export function parkStorm(): number {
     for (let i = 0; i < count; i++) {
-        const e = slots[i];
-        if (e !== null) disposeReactive(e);
-        slots[i] = null;
+        fleet.release(live[i] as Entity);
+        live[i] = null;
     }
     count = 0;
     return 0;
@@ -240,7 +239,7 @@ export function disposeStorm(): number {
 export function readPositions(out: Float32Array): number {
     let j = 0;
     for (let i = 0; i < count; i++) {
-        const e = slots[i]!;
+        const e = live[i]!;
         out[j] = e.x;
         out[j + 1] = e.y;
         j = j + 2;
@@ -260,7 +259,7 @@ export function step(dt: number): number {
     let sink = 0;
     const s = dt * 60;                  // frame-rate normalization: 1 at 60 fps
     for (let i = 0; i < count; i++) {
-        const e = slots[i]!;
+        const e = live[i]!;
         // soft spring toward the field center (500, 500); the per-tick vx/vy
         // writes keep speed's deps live so the effect fires. Sign law:
         // (0.05 - x * 0.0001) pulls TOWARD 500 -- the inverted form repels

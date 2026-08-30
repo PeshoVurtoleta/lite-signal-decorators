@@ -247,5 +247,6 @@ A FIFTH candidate -- fleet helpers (a sized-registry + eager-prealloc + throw
 convenience over `capacityFor` + `createRegistry`) -- is anticipated by PLAN-S6
 under the SAME bar. It is named here so its future consideration is on the record;
 it is not admitted by this session and creates no obligation.
+ADMITTED 2026-08-30 (v1.5.0) under decisions/0013 criterion (d) -- the demo fleet is the named consumer; its hand-rolled pool was deleted for the helper (net-negative diff).
 
 MIT (c) Zahary Shinikchiev <shinikchiev@yahoo.com>

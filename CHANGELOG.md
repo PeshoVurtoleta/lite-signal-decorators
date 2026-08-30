@@ -4,6 +4,117 @@ All notable changes to `@zakkster/lite-signal-decorators` are documented here.
 The format follows Keep a Changelog; this project adheres to Semantic
 Versioning.
 
+## [1.5.0] - 2026-08-30
+
+The gamedev release -- decisions/0013 criterion (d), and the LADDER CLOSES. The
+package already shipped the fleet primitives (`capacityFor` sizes a registry;
+`createRegistry` builds it; `releaseReactive`/`reinitReactive` park and revive an
+instance with zero engine nodes held while parked), and the demo hand-rolled a
+pool over them. `createFleet(inventory, bind, opts?)` is that pool, extracted:
+the flagship-audience helper that composes the shipped primitives into one
+fixed-capacity fleet handle. The demo is the NAMED consumer (criterion (d): serve
+the flagship audience on a shipped primitive with the demo as a live consumer
+landing in the same release) -- its hand-rolled pool was DELETED for the helper,
+and that diff went NET-NEGATIVE. Surface 22 -> 23, and the decisions/0013
+strategic-admission ladder is closed at four rungs.
+
+### Added
+
+- **`createFleet(inventory, bind, opts?) -> Fleet`** (23rd export) -- a
+  fixed-capacity pool of reactive instances over the shipped primitives. COLD
+  construction: `capacityFor(inventory, opts)` sizes a registry, `createRegistry`
+  builds it, `bind(registry)` binds the caller's decorated class to that registry
+  and returns it (PD-76 -- the helper never wraps or redefines the class; the demo
+  keeps its real `@reactiveHost` cycle), then one member per inventory unit is
+  EAGER-constructed and PARKED (PD-75 -- `acquire` never constructs). The handle
+  is `{ registry, Class, capacity, acquire(initials?), release(vm), at(i),
+  size(), stats(), dispose() }`. HOT: `acquire` pops an `Int32Array` free-list and
+  `reinitReactive`s a parked member (`initials` override the reset values);
+  `release` validates a per-fleet symbol slot stamp (a plain symbol-keyed integer
+  field, NOT a WeakMap -- PD-77's forcing condition, resolved) and
+  `releaseReactive`s the member back to the pool. Both hot bodies allocate ZERO.
+  SIX named fail-closed misuses: `FleetExhaustedError` (acquire at capacity;
+  pre-checked, the registry's own `CapacityError` is unreachable because all N are
+  prealloc'd), `FleetForeignMemberError` (release of a vm this fleet never handed
+  out -- the slot stamp is the check), `FleetDoubleReleaseError` (release of an
+  already-parked vm -- `releaseReactive` returning false is the check),
+  `FleetDisposedError` (any call after `dispose()`), a `RangeError` (`at(i)`
+  outside `[0, capacity)`), and a `TypeError` (a `bind` that is not a function or
+  does not return a constructor). These six are internal by design -- ONE exported
+  error class remains the surface law (`ReactiveDisposedError`); the fleet names
+  are message/name-level and pinned by test/20. Construction is ATOMIC: any
+  mid-prefill throw disposes the already-built members and destroys the registry
+  before rethrowing. `dispose()` disposes every member LIVE AND PARKED (park ->
+  dispose lands DISPOSED) then destroys the fleet-owned registry -- parked members
+  are disposed too, never leaked.
+- **`test/20-fleet.test.mjs`** (37 cases) -- the API surface + the six fail-closed
+  laws + both emit lanes where meaningful + a buildless (`defineReactive`) class +
+  `initials` pass-through, and the 22 -> 23 export-count assertion.
+- **`test/torture/fleet-torture.mjs`** (a NEW lane, 19 scenarios / 19 controls) --
+  proves the HELPER's bookkeeping (the primitive pooled-cycle proof stays in
+  `reinit-torture`): A1 4096 acquire/release cycles at zero-alloc budgets with a
+  `TORTURE_BREAK` control that catches a deliberately leaky variant; A2 1000
+  fleet lifecycles at N=512 returning `activeNodes` to exact baseline with
+  `poolGrowths` 0.
+- **The demo consumer** (never cut -- the admission ground): `loop.ts`'s
+  hand-rolled pool (the `EntityShape` wall plumbing, slots/count, spawn/kill,
+  dispose-storm bodies) is DELETED in favor of one `createFleet` call;
+  `step`/`readPositions` use `at(i)`; the drift wall + HUD keep working. The
+  `EntityShape` twin is kept ONLY for pre-existence `capacityFor` sizing.
+
+### Changed
+
+- **The export surface: 22 -> 23** -- an additive MINOR under the 1.0.0 semver
+  promise (new exports are minors). The 1.0.0 hot canon
+  (`makeGet`/`makeSet`/`makeDerivedGet`) stays byte-identical: `createFleet` is
+  cold construction over the shipped primitives and moves no accessor byte.
+- Version sync to 1.5.0 across the FOUR sites: `package.json`, the `VERSION`
+  const, `llms.txt` line 3, and the `SignalDecorators.d.ts` VERSION literal.
+- `test/15` surface-freeze recount 22 -> 23 (the CB-A2 sites); its four-place
+  VERSION leg reads live values and needed no edit.
+- The demo's boot cost rises by ~7ms one-time for the 4096 eager constructions
+  (the eager prefill moves cost to load -- the honest number, reported not hidden;
+  it buys a zero-alloc steady state).
+
+### Measured (rig: Node v26.3.1, arm64 Apple M4 Pro, lite-signal 1.5.0)
+
+- A1 acquire/release, 4096 cycles at 8N: **1.649 B/cyc** vs the in-process
+  zero-alloc control **0.234 B/cyc** (+2 limit); `gc.major` **0**; minors **2**
+  vs a limit of 129; `maxPauseMs` **0.36**. The `TORTURE_BREAK` leaky variant is
+  caught at **42.881 B/cyc**.
+- A2 1000 lifecycles x N=512 return `activeNodes` to the exact baseline;
+  `poolGrowths` delta **0**.
+- Release frees exactly `-(P+L+D+E+1)` nodes -- on the demo `Entity` shape that
+  is **-8** node-delta per release.
+
+### Records
+
+- decisions/0009 (the fifth admission candidate) and decisions/0011 (the
+  fleet-helpers section) each gain an ADMITTED stamp.
+- decisions/0013 gains its COMPLETION ADDENDUM: the strategic-admission ladder is
+  CLOSED -- four rungs shipped same-day (v1.2.0 `@localTo` (a); v1.3.0
+  `snapshotOf` + `forEachReactive` (c); v1.4.0 `costOfInstance` (b); v1.5.0
+  `createFleet` (d)). Surface 18 -> 23 across the ladder; candidates 1 (`bump`)
+  and 7 (`onObserved` sugar) remain deferred behind the original real-consumer
+  bar, which resumes as the only track for anything new. The planned
+  decisions/0015 was CUT -- its fleet-contract facts fold into the 0013 addendum.
+
+### Gate output (section-10 chain, archived verbatim)
+
+```
+  fixtures              OK       exit 0 -- emit fixtures regenerated
+  test                  OK       exit 0 -- 377 pass / 0 fail
+  test:gc               OK       exit 0 -- 377 pass / 0 fail
+  torture               OK       exit 0 -- 17 passed, 2 skipped, 0 warned, 0 failed in 35.5s
+  torture:controls      OK       exit 0 -- 19 passed, 0 skipped, 0 warned, 0 failed in 3.7s
+  torture:peer-preview  REPORTED NON-BLOCKING -- lane completed (exit 0) [preview 1.9.0-preview.6 SUITE-GREEN 19/0/0/0; canary 1.9.0-canary.1 SUITE-GREEN 19/0/0/0]
+  bench:selftest        OK       exit 0 -- ALL PASS -- 22 passed, 0 failed
+  cookbook              OK       exit 0/0 -- corpus 18/18 companions ok in 2.0s; controls 8/8 controls fail correctly in 4.9s
+  pack                  OK       exit 0 -- 7/7 files, exact 7-name set, no demo/ no Publications/
+----------------------------------------------------------------------
+  GATE PASS -- 8 blocking steps + 1 non-blocking (peer-preview)
+```
+
 ## [1.4.0] - 2026-08-30
 
 The measured-instance pillar -- decisions/0013 criterion (b). `costOf(Factory)`

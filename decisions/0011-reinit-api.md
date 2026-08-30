@@ -153,6 +153,7 @@ it -- not a demo, not a recipe, not a bench adapter, not a hypothetical. There i
 no such consumer. It stays OUT. The pooled-reinit lifecycle this session ships is
 the primitive a future fleet helper would build ON; shipping the primitive does
 not lower the helper's admission bar.
+ADMITTED 2026-08-30 (v1.5.0) under decisions/0013 criterion (d) -- the demo fleet is the named consumer; its hand-rolled pool was deleted for the helper (net-negative diff).
 
 ## Verification (green)
 

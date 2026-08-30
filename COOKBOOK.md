@@ -1288,6 +1288,11 @@ baseline with `poolGrowths === 0` (CB-A4).
   bound to its world: it measures a live member through its own registry (sizing
   the world up front still needs the probe class -- `capacityFor` runs before
   any instance exists).
+- Since 1.5.0, `createFleet(inventory, bind, opts?)` packages this whole
+  pool -- `capacityFor` sizing, `createRegistry`, eager prefill, and the
+  `acquire`/`release` park/reinit cycle -- behind one handle, so the demo's
+  hand-rolled version was deleted for it; reach for the helper when you want a
+  fixed-capacity fleet with zero-alloc spawn/kill and named fail-closed misuses.
 
 ## Recipe 10 -- Pro: registry isolation, and what refuses to cross
 
