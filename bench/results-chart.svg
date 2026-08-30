@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="556" viewBox="0 0 720 556" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" role="img" aria-label="Churn benchmark: ops per second and transient heap per adapter">
+  <rect x="0" y="0" width="720" height="556" fill="#f6f8fa"/>
+  <text x="16" y="28" font-size="16" font-weight="700" fill="#1f2328">CHURN -- construct + write + read + dispose, per adapter</text>
+  <text x="16" y="46" font-size="10" fill="#57606a">shape={"P":4,"D":2,"E":1}  iters=200000  -- higher ops/s is faster; lower heap is leaner. blue = this package.</text>
+  <rect x="16" y="58" width="688" height="196" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="28" y="78" font-size="13" font-weight="700" fill="#1f2328">(a) throughput -- ops/s per adapter</text>
+  <text x="692" y="78" font-size="10" text-anchor="end" fill="#57606a">thousands of ops/s (K)</text>
+  <text x="150" y="109" font-size="11" text-anchor="end" fill="#1f2328">lsd</text>
+  <rect x="158" y="97.0" width="68.0" height="16" rx="2" fill="#0969da"/>
+  <text x="562" y="109" font-size="11" fill="#1f2328">1323K</text>
+  <text x="150" y="135" font-size="11" text-anchor="end" fill="#1f2328">lsd-define</text>
+  <rect x="158" y="123.0" width="77.6" height="16" rx="2" fill="#0969da"/>
+  <text x="562" y="135" font-size="11" fill="#1f2328">1510K</text>
+  <text x="150" y="161" font-size="11" text-anchor="end" fill="#1f2328">lite-raw-boxes</text>
+  <rect x="158" y="149.0" width="86.5" height="16" rx="2" fill="#57606a"/>
+  <text x="562" y="161" font-size="11" fill="#1f2328">1682K</text>
+  <text x="150" y="187" font-size="11" text-anchor="end" fill="#1f2328">mobx</text>
+  <rect x="158" y="175.0" width="18.4" height="16" rx="2" fill="#57606a"/>
+  <text x="562" y="187" font-size="11" fill="#1f2328">358K</text>
+  <text x="150" y="213" font-size="11" text-anchor="end" fill="#1f2328">signal-utils</text>
+  <rect x="158" y="201.0" width="17.7" height="16" rx="2" fill="#57606a"/>
+  <text x="562" y="213" font-size="11" fill="#1f2328">344K</text>
+  <text x="150" y="239" font-size="11" text-anchor="end" fill="#1f2328">alien-class</text>
+  <rect x="158" y="227.0" width="396.0" height="16" rx="2" fill="#57606a"/>
+  <text x="562" y="239" font-size="11" fill="#1f2328">7702K</text>
+  <rect x="16" y="268" width="688" height="196" rx="6" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="28" y="288" font-size="13" font-weight="700" fill="#1f2328">(b) transient heap per timed run -- heapMed</text>
+  <text x="692" y="288" font-size="10" text-anchor="end" fill="#57606a">kilobytes (KB)</text>
+  <text x="150" y="319" font-size="11" text-anchor="end" fill="#1f2328">lsd</text>
+  <rect x="158" y="307.0" width="4.0" height="16" rx="2" fill="#0969da"/>
+  <text x="562" y="319" font-size="11" fill="#1f2328">492.4 KB</text>
+  <text x="150" y="345" font-size="11" text-anchor="end" fill="#1f2328">lsd-define</text>
+  <rect x="158" y="333.0" width="21.8" height="16" rx="2" fill="#0969da"/>
+  <text x="562" y="345" font-size="11" fill="#1f2328">2704 KB</text>
+  <text x="150" y="371" font-size="11" text-anchor="end" fill="#1f2328">lite-raw-boxes</text>
+  <rect x="158" y="359.0" width="371.3" height="16" rx="2" fill="#57606a"/>
+  <text x="562" y="371" font-size="11" fill="#1f2328">45955 KB</text>
+  <text x="150" y="397" font-size="11" text-anchor="end" fill="#1f2328">mobx</text>
+  <rect x="158" y="385.0" width="396.0" height="16" rx="2" fill="#57606a"/>
+  <text x="562" y="397" font-size="11" fill="#1f2328">49015 KB</text>
+  <text x="150" y="423" font-size="11" text-anchor="end" fill="#1f2328">signal-utils</text>
+  <rect x="158" y="411.0" width="173.9" height="16" rx="2" fill="#57606a"/>
+  <text x="562" y="423" font-size="11" fill="#1f2328">21526 KB</text>
+  <text x="150" y="449" font-size="11" text-anchor="end" fill="#1f2328">alien-class</text>
+  <rect x="158" y="437.0" width="232.4" height="16" rx="2" fill="#57606a"/>
+  <text x="562" y="449" font-size="11" fill="#1f2328">28764 KB</text>
+  <text x="16" y="484" font-size="10" fill="#57606a">* alien-class is the speed-of-light reference: a hand-rolled class over alien-signals with no</text>
+  <text x="16" y="498" font-size="10" fill="#57606a">  pooled instance lifecycle -- nodes are freed only by GC and effect stop() is terminal, so a</text>
+  <text x="16" y="512" font-size="10" fill="#57606a">  released instance cannot be re-acquired (results.txt, churn-reuse). It has no class/disposal layer.</text>
+  <text x="16" y="532" font-size="9" fill="#57606a">source: bench/results.txt (stamped run) -- module lsd 1.1.0 -- 2026-08-30T01:03:57.521Z</text>
+  <text x="16" y="544" font-size="9" fill="#57606a">rig: Apple M4 Pro darwin/arm64 node v26.3.1 -- median-of-5, reps=5</text>
+</svg>

@@ -38,6 +38,10 @@ Surface stays at 18 exports; pack stays the same 7-file set.
 - Cookbook gated set grows 6 -> 8 (adds `r13`, `r17`).
 - Publications refresh (P3): the outward drafts restamped to the 1.1.x story;
   files stay git-untracked.
+- Bench chart artifact (closes ROADMAP open question 5): `bench/chart.mjs`
+  renders `bench/results-chart.svg` -- the CHURN lane (ops/s + heapMed per
+  adapter) parsed verbatim from the stamped `bench/results.txt`, deterministic
+  and dev-side only (never in `files[]`); wired into the README numbers section.
 
 ### Gate output (section-10 chain, archived verbatim)
 

@@ -386,6 +386,10 @@ The gates that hold it (run on every change, all green at 1.1.1):
 
 The cross-framework matrix lives in `bench/` (private, never shipped): six engines -- both our tiers, the hand-written `lite-raw-boxes` baseline, MobX 7, signal-utils/signal-polyfill, and a hand-rolled alien-signals class -- across eight class-shaped scenarios (including the `churn-reuse` acquire/release lane, where the lite tiers pool with zero retained growth and MobX/signal-utils/alien-class are structurally `unsupported` -- no disposable instance lifecycle to pool), checksum-verified for identical work, stamped into `bench/results.txt`. The formal verdicts are in [`decisions/0006-kill-criteria.md`](decisions/0006-kill-criteria.md): the decorated path measured **0.94x** the hand-written baseline on vm-write and **1.10x** on a 10k-instance fleet read (the 2.0x kill line cleared with margin), and **0 major + 0 minor GC over 4096 construct/use/dispose cycles** with pools at floor -- while emitting ~12.6x less transient garbage per churn run than the hand-rolled class it replaces.
 
+![CHURN benchmark: ops/s and transient heap per adapter](https://raw.githubusercontent.com/PeshoVurtoleta/lite-signal-decorators/main/bench/results-chart.svg)
+
+The chart above is generated from the stamped `bench/results.txt` by `bench/chart.mjs` (`node bench/chart.mjs`) -- it plots the CHURN lane for every adapter at full scale, including `alien-class`, the hand-rolled reference that has no disposable instance lifecycle to pool.
+
 </details>
 
 ---
