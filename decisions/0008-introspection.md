@@ -127,6 +127,19 @@ cooperation. The one-line upstream ask to make it first-class:
 
 Surfaced to the user; not implemented in LiteDevtools' repo this stage.
 
+**Addendum 2026-08-30 -- SHIPPED upstream.** lite-devtools **1.5.0** (commit
+fb845c0, full planner->coder->reviewer->qa pipeline) adds `labelResolver?:
+(id) => string | undefined` to `ToDotOptions` AND `ToTreeOptions` -- placed at
+RENDER time, not on `graph()`, so snapshots stay pure/serializable and one
+graph renders under different resolvers (deserialize()d graphs included).
+Laws as shipped: non-function option throws a named `TypeError` at the door;
+`undefined`/`null`/non-string returns fall through to the default label; a
+throwing resolver is caught per node (never-throw renderer law), logged once;
+resolver strings pass the same esc()+maxLabel truncation as default labels
+(control chars stripped for toTree). `graph()` provably never invokes it
+(torture t0 purity case). This closes ROADMAP open question 3; the
+decorators-side graph-walk recipe remains PD-38-deferred on its own merits.
+
 ## Evidence
 
 costOf Q3 nodes 1/2/15/29 + double-probe identical + cache identity; capacityFor
