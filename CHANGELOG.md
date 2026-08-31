@@ -4,6 +4,36 @@ All notable changes to `@zakkster/lite-signal-decorators` are documented here.
 The format follows Keep a Changelog; this project adheres to Semantic
 Versioning.
 
+## [1.5.1] - 2026-08-31
+
+Test-suite hardening only; the library source (`SignalDecorators.js`) is
+unchanged from 1.5.0. Seven torture retention gates were found to be vacuous
+variant-2 tautologies -- they tracked the instance inside an effect owner, so
+`stop()`/dispose auto-untracked it and `size() === 0` held even while instances
+stayed retained -- and were converted to the finalization-authority pattern:
+the real instance is tracked OUTSIDE any owner via new harness helpers, never
+untracked, then hard-settled with a residual budget of `RES = max(16, n/1000)`.
+Independent `stats()` / F-0 pool-floor oracles were left intact.
+
+### Added
+
+- **`TORTURE_LEAK=1`** -- a retention RED control (matching the package's
+  `TORTURE_*` env convention) that pins instances to force the converted
+  retention gates RED, proving each gate can actually fail.
+
+### Changed
+
+- **7 retention gates across 6 torture files** converted from vacuous
+  variant-2 tautologies to the finalization-authority pattern (track the real
+  instance outside any owner via new `test/torture/helpers/harness.mjs`
+  helpers, no untrack, hard settle, residual `<= RES = max(16, n/1000)`; `pool[]`
+  scaffolding cleared before the settle). Files: `test/torture.mjs`,
+  `test/torture/fleet-torture.mjs`, `test/torture/introspection-torture.mjs`,
+  `test/torture/leak-torture.mjs`, `test/torture/localto-torture.mjs`,
+  `test/torture/reinit-torture.mjs`.
+- **`leak-torture` `LEAK_EVERY` 512 -> 64** so its `TORTURE_BREAK=leak-torture`
+  sabotage control still exceeds the new residual budget.
+
 ## [1.5.0] - 2026-08-30
 
 The gamedev release -- decisions/0013 criterion (d), and the LADDER CLOSES. The

@@ -2,16 +2,17 @@
 //
 // Package-level gate for @zakkster/lite-signal-decorators. Phase 1 proves an
 // explicitly-disposed reactive instance is fully reclaimed (no retention past
-// its owner); phase 2 proves the accessor/derived hot path allocates nothing
-// and provokes no major GC. Both phases drive the REAL package entries through
-// a faithful Stage-3 mini-emitter -- the same code path a transpiler generates.
+// its owner) -- the AUTHORITY is FINALIZATION: each vm is tracked OUTSIDE its
+// owner (no auto-untrack) and reclamation is proven by tracker.size() <= RES
+// after a HARD settle, never by an untrack counter. Phase 2 proves the
+// accessor/derived hot path allocates nothing and provokes no major GC. Both
+// phases drive the REAL package entries through a faithful Stage-3 mini-emitter --
+// the same code path a transpiler generates.
+//
+// TORTURE_LEAK=1 pins every disposed vm in a module sink so it can NEVER
+// finalize -> residual ~= CYCLES -> the phase-1 gate trips RED (the RED control).
 import { GcProfiler, checkNoGc } from '@zakkster/lite-gc-profiler';
-import {
-  createLeakTracker,
-  createOwnerCascadeOrphanKernel,
-  createObserverOrphanKernel,
-  createAsyncRetentionKernel,
-} from '@zakkster/lite-leak';
+import { createLeakTracker } from '@zakkster/lite-leak';
 import { createRoot, effect } from '@zakkster/lite-signal';
 
 import {
@@ -83,43 +84,68 @@ const VM = buildVMClass();
 
 const CYCLES = 4096;
 const HOT = 400000;
-const leaks = [];
+// AUTHORITY residual ceiling: single digits are expected on a clean run; a real
+// leak leaves ~CYCLES. Finalization is nondeterministic, so the gate is `<= RES`,
+// never `=== 0`.
+const RES = Math.max(16, (CYCLES / 1000) | 0);
 const warns = [];
 
+// PLAIN tracker: no kernels, no onLeak. Finalization is the release path, so a
+// held-but-uncollected object must NOT be flagged, and onLeak (which fires on
+// COLLECTION, kind 'unknown') is not a leak signal for this pattern. onWarning
+// stays -- a warning is a real finding.
 const tracker = createLeakTracker({
   name: 'torture',
-  onLeak: (r) => leaks.push(r.kind + ':' + String(r.tag)),
   onWarning: (w) => warns.push(w.kind + ':' + w.reason),
 });
-// Only the surfaces this package touches: the reactive owner tree (cascade
-// orphans), graph observers, and async retention. This package patches no
-// timer/listener/DOM surface, so those kernels are not registered.
-tracker.registerKernel(createOwnerCascadeOrphanKernel());
-tracker.registerKernel(createObserverOrphanKernel());
-tracker.registerKernel(createAsyncRetentionKernel());
+
+// RED control (TORTURE_LEAK=1): pin every disposed vm in this module sink so it
+// can NEVER finalize -> residual ~= CYCLES -> the phase-1 gate trips RED.
+const RETAIN = process.env.TORTURE_LEAK === '1';
+const __leakSink = [];
 
 // ---- phase 1: retention torture ------------------------------------------
 // The VM anchor is DETACHED (createRoot in wireInstance), so the parent effect's
 // disposal does NOT cascade the VM (DV-1). disposeReactive is the only lifecycle
-// owner -- call it, drop the reference, and the instance must be reclaimed.
+// owner. AUTHORITY = FINALIZATION: capture the vm inside the owner, then track it
+// AFTER the owner scope closes so getOwner() is undefined at the track site and
+// lite-leak arms NO auto-untrack. The disposed vm's only strong ref is then the
+// tracker's WeakRef, so it must be reclaimed -- unless a real leak (or the RED
+// pin) retains it.
+//
+// (An earlier version tracked from INSIDE the effect and relied on stop() to
+// drive size() to 0 -- a VARIANT-2 VACUOUS gate: the auto-registered
+// onCleanup(untrack) zeroed size() by construction even if the vm were retained.)
 for (let i = 0; i < CYCLES; i++) {
+  let captured = null;
   createRoot(() => {
     const stop = effect(() => {
       const vm = new VM();
       vm.count = i & 1023;
       const seen = vm.sum;                 // exercise derived recompute
-      const tag = 'vm#' + (seen & 255);    // detached primitive; no capture of vm
-      tracker.track(vm, noopRelease, tag, { audit: true });
+      if (seen === -1) console.log('unreachable');
+      captured = vm;                       // hoist the ref OUT of the owner
       disposeReactive(vm);                 // explicit teardown, allocation-free
     });
     stop();                                // effect is detached; dispose it too
   });
+  tracker.track(captured, noopRelease, i & 255);   // track OUTSIDE any owner
+  if (RETAIN) __leakSink.push(captured);   // RED: pin -> never finalizes
+  captured = null;
 }
 
 function noopRelease() {}
 
-globalThis.gc?.();
-await new Promise((r) => setTimeout(r, 50));
+// Settle HARD: FinalizationRegistry callbacks fire only after a collection AND a
+// macrotask; loop until the residual reaches the ceiling or the budget is spent.
+for (let k = 0; k < 40; k++) {
+  globalThis.gc?.();
+  await new Promise((r) => setTimeout(r, 15));
+  if (tracker.size() <= RES) break;
+}
+// Keep the RED sink live ACROSS the settle (V8 liveness-elides a module array
+// written-but-never-read after the loop, masking the pin).
+if (__leakSink.length === -1) console.log('unreachable');
 
 const live = tracker.size();
 const findings = tracker.audit();
@@ -147,19 +173,19 @@ const s = gc.summary();
 const report = checkNoGc(s, { maxMajor: 0, maxPauseMs: 4 });
 gc.stop();
 
-const ok = report.ok && live === 0 && leaks.length === 0 && findings.length === 0;
+const ok = report.ok && live <= RES && findings.length === 0 && warns.length === 0;
 console.log(
-  'GATE leak=size ' + live + '/0 findings=' + findings.length +
+  'GATE AUTHORITY residual=size ' + live + '/' + RES + ' findings=' + findings.length +
   ' warnings=' + warns.length +
   ' | gc major=' + s.gc.major + ' minor=' + s.gc.minor +
   ' maxMs=' + s.gc.maxMs.toFixed(2) +
   ' | ' + (ok ? 'ok' : 'FAIL')
 );
 if (!ok) {
+  if (live > RES) console.error('  residual ' + live + ' > ' + RES + ' -- instance(s) outlived disposal');
   for (const v of report.violations) {
     console.error('  violation ' + v.metric + ' limit=' + v.limit + ' actual=' + v.actual);
   }
   for (const f of findings) console.error('  finding ' + f.kind + ':' + f.reason);
-  for (const l of leaks) console.error('  leak ' + l);
   process.exitCode = 1;
 }

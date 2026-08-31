@@ -1,6 +1,6 @@
 # @zakkster/lite-signal-decorators
 
-VERSION 1.5.0
+VERSION 1.5.1
 
 > Standard-decorators layer over @zakkster/lite-signal, built on the TC39
 > decorators proposal (Stage 2.7 since 2026-05; TS 5.x / Babel 2023-11 emit
@@ -169,7 +169,7 @@ slot for a poison handle, so any later read/write throws a named
   `FinalizationRegistry` reports any instance GC'd without `disposeReactive`.
 - `ReactiveDisposedError` -- `extends Error`, `name` `"ReactiveDisposedError"`,
   fields `className` and `key`.
-- `VERSION` -- `"1.5.0"`.
+- `VERSION` -- `"1.5.1"`.
 
 ## Registry law (one registry per host chain)
 

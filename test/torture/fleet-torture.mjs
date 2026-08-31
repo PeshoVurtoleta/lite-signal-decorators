@@ -23,29 +23,33 @@
 //   A2 (conservation over lifecycles) -- 1000 full fleet lifecycles (createFleet
 //     N=512 -> partial churn -> dispose): every fleet's poolGrowths delta is 0
 //     across its churn (the Int32Array/slots/stamps never grow), every fleet
-//     returns to its prefill baseline (activeNodes 0) before dispose, a tracked
-//     sample member NEVER outlives its fleet (lite-leak size() === 0 after
-//     settle, 0 findings, 0 warnings), and the DEFAULT registry never moves (the
-//     fleets own their registries and destroy them).
+//     returns to its prefill baseline (activeNodes 0) before dispose -- the
+//     INDEPENDENT node oracles -- and a tracked sample member NEVER outlives its
+//     fleet. The retention AUTHORITY is FINALIZATION: the sample is tracked
+//     OUTSIDE any owner with a shared NOOP cleanup + numeric tag (held-value-
+//     safe), NEVER untracked, its holder refs cleared, so after a HARD settle the
+//     residual tracker.size() <= RES = max(16, LIFECYCLES/1000). The DEFAULT
+//     registry never moves (the fleets own their registries and destroy them).
+//     (An earlier version tracked from inside an effect and untracked on stop() --
+//     VARIANT-2 VACUOUS: stop() drove size() to 0 by construction. Fixed here.)
 //
 // TORTURE_BREAK=fleet-torture retains one object per cycle inside the A1 MEASURED
 // delta-heap window: the per-op heap delta then climbs above the zero-alloc
 // control + 2 B floor and the A1 headline check fails. The control MUST exit
-// non-zero.
+// non-zero. TORTURE_LEAK=1 pins every tracked A2 sample in a module sink so it
+// can NEVER finalize -> residual ~= LIFECYCLES -> the A2 finalization gate trips
+// RED (the node oracles stay green: the samples are still disposed).
 //
 // ASCII-only.
 
-import { effect, stats, createRegistry } from "@zakkster/lite-signal";
-import {
-    createLeakTracker,
-    createOwnerCascadeOrphanKernel,
-    createObserverOrphanKernel,
-} from "@zakkster/lite-leak";
+import { stats, createRegistry } from "@zakkster/lite-signal";
+import { createLeakTracker } from "@zakkster/lite-leak";
 import * as pkg from "../../SignalDecorators.js";
 import { buildClass } from "../shared/mock-emitter.mjs";
 import {
-    RUN, check, breakActive, settle, pass,
+    RUN, check, breakActive, pass,
     conservationBaseline, assertConserved, gcGate, dieInfra,
+    retainLeak, residualCeiling, settleHard,
 } from "./helpers/harness.mjs";
 
 const NAME = "fleet-torture";
@@ -269,24 +273,21 @@ const SCENARIO_BASE = conservationBaseline();
     const LIFECYCLES = 1000;
     const POOL_N = 512;
     const CHURN = 64;                // partial churn per lifecycle
+    const RES = residualCeiling(LIFECYCLES);   // finalization residual ceiling
+    const RETAIN = retainLeak();     // RED control: pin every tracked sample
+    const __leakSink = [];
 
-    const leaks = [];
     const warns = [];
+    // PLAIN tracker: no kernels, no onLeak (finalization is the release path).
+    // onWarning stays -- a warning is a real finding.
     const tracker = createLeakTracker({
         name: NAME,
-        onLeak: (r) => leaks.push(r.kind + ":" + String(r.tag)),
         onWarning: (w) => warns.push(w.kind + ":" + w.reason),
     });
-    // The reactive owner tree (cascade orphans) is the surface the fleet owns;
-    // the observer kernel guards a surface it does not patch, so it must stay
-    // silent -- a warning would itself be a finding.
-    tracker.registerKernel(createOwnerCascadeOrphanKernel());
-    tracker.registerKernel(createObserverOrphanKernel());
 
-    // Held-value-safe cleanup + audit options, allocated ONCE. `release` captures
-    // nothing; the tag passed per-cycle is a detached primitive.
+    // Held-value-safe cleanup, allocated ONCE. `release` captures nothing; the tag
+    // passed per-cycle is a detached primitive.
     function release() {}
-    const AUDIT = { audit: true };
 
     const held = new Array(CHURN);
     let sink = 0;
@@ -304,11 +305,12 @@ const SCENARIO_BASE = conservationBaseline();
         // Partial churn: acquire CHURN members, use each, then release.
         for (let k = 0; k < CHURN; k++) held[k] = fleet.acquire();
 
-        // Track a sample member from inside a DEFAULT-registry effect -> owner
-        // captured, onCleanup(untrack) registered. Deterministic reclaim: the
-        // sample is disposed with the fleet, then the effect is stopped.
+        // AUTHORITY: track a sample member OUTSIDE any owner (module-scope loop ->
+        // getOwner() undefined) so lite-leak arms NO auto-untrack; finalization is
+        // the sole release path. Never untracked.
         const sample = held[0];
-        const sampleStop = effect(function () { tracker.track(sample, release, L2 & 255, AUDIT); });
+        tracker.track(sample, release, L2 & 255);
+        if (RETAIN) __leakSink.push(sample);   // RED: pin -> the sample never finalizes
 
         for (let k = 0; k < CHURN; k++) {
             const vm = held[k];
@@ -332,23 +334,25 @@ const SCENARIO_BASE = conservationBaseline();
         );
 
         fleet.dispose();               // disposes every parked member + destroys the registry
-        sampleStop();                  // effect cleanup -> untrack -> size decrements
 
-        for (let k = 0; k < CHURN; k++) held[k] = null;   // drop refs
+        for (let k = 0; k < CHURN; k++) held[k] = null;   // drop scaffolding refs -> the
+        // disposed sample's only strong ref is the tracker's WeakRef (unless RETAIN pins it).
     }
     RUN.op = -1;
     if (sink === -1) console.log("unreachable");
 
-    await settle();
-    globalThis.gc();
-    await settle();
+    await settleHard(() => tracker.size(), RES);
+    // Keep the RED sink live ACROSS the settle (V8 liveness-elides a module array
+    // written-but-never-read after the loop, masking the pin).
+    if (__leakSink.length === -1) console.log("unreachable");
 
     const live = tracker.size();
     const findings = tracker.audit();
 
     process.stdout.write(
         "torture: fleet-torture A2 lifecycles=" + LIFECYCLES + " N=" + POOL_N + " churn=" + CHURN +
-        " | leak size=" + live + "/0 findings=" + findings.length + " warnings=" + warns.length + "\n",
+        " | AUTHORITY residual size=" + live + "/" + RES + " findings=" + findings.length +
+        " warnings=" + warns.length + "\n",
     );
 
     check(warns.length === 0, () => "A2: kernel warnings emitted: " + warns.join(","));
@@ -356,10 +360,10 @@ const SCENARIO_BASE = conservationBaseline();
         findings.length === 0,
         () => "A2: audit findings: " + findings.map((f) => f.kind + ":" + f.reason).join(","),
     );
-    check(leaks.length === 0, () => "A2: leak callbacks fired: " + leaks.join(","));
     check(
-        live === 0,
-        () => "A2: tracker retained " + live + " handle(s) after settle -- a member outlived its fleet",
+        live <= RES,
+        () => "A2: AUTHORITY finalization residual size()=" + live + " > " + RES +
+            " -- a member outlived its fleet",
     );
 }
 

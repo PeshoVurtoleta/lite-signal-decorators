@@ -1,5 +1,5 @@
 /**
- * @zakkster/lite-signal-decorators v1.5.0
+ * @zakkster/lite-signal-decorators v1.5.1
  * --------------------
  * Standard-decorators layer over @zakkster/lite-signal. Turns a plain class into
  * a reactive view-model with measured per-instance cost and deterministic
@@ -2702,4 +2702,4 @@ export function auditReactive(on) {
 // --- Version ------------------------------------------------------------------
 
 /** Package version. Kept in lockstep with package.json and llms.txt. */
-export const VERSION = "1.5.0";
+export const VERSION = "1.5.1";

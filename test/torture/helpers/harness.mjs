@@ -94,6 +94,47 @@ export function breakActive(name) {
     return process.env.TORTURE_BREAK === name;
 }
 
+// --- retention finalization authority -----------------------------------------
+//
+// A retention gate is honest ONLY when its release path is FINALIZATION, not a
+// counter a deterministic untrack drives to zero. The pattern (per LiteDiCron
+// t7-soak, the authority): track the REAL object with a shared cleanup + numeric
+// tag that close over NOTHING, do it OUTSIDE any active owner (so lite-leak arms
+// no auto-untrack), NEVER untrack it, clear every test-scaffolding reference, then
+// settle HARD and read tracker.size(). A properly-disposed instance is collected
+// (size drops); a retained one is not. The gate is `size() <= residualCeiling(n)`,
+// never `=== 0` (finalization is nondeterministic).
+//
+// TORTURE_LEAK=1 is the RED control: it pins every tracked object in a module
+// sink so it can NEVER finalize -> residual ~= the tracked count -> the `<= RES`
+// gate trips. It leaves the engine-node oracles (F-0, activeNodes) untouched: the
+// objects are still disposed, only their JS identity is pinned, so ONLY the
+// retention gate goes RED.
+
+/** True when TORTURE_LEAK=1: pin every tracked retention object (the RED control
+ *  that proves the finalization gate can fail). */
+export function retainLeak() {
+    return process.env.TORTURE_LEAK === "1";
+}
+
+/** Residual ceiling for a finalization gate over `n` tracked objects: single
+ *  digits are expected on a clean run; a real leak leaves ~n. */
+export function residualCeiling(n) {
+    return Math.max(16, (n / 1000) | 0);
+}
+
+/** Hard settle: drive FinalizationRegistry callbacks to ground. Up to `rounds`
+ *  gc()+macrotask passes (15 ms each), breaking early once sizeFn() <= target.
+ *  --expose-gc is required (the runner guarantees it). */
+export async function settleHard(sizeFn, target, rounds) {
+    const R = rounds === undefined ? 40 : rounds;
+    for (let k = 0; k < R; k++) {
+        globalThis.gc();
+        await new Promise((r) => setTimeout(r, 15));
+        if (sizeFn() <= target) break;
+    }
+}
+
 // --- settling -----------------------------------------------------------------
 
 /** Await a macrotask then a microtask, so any asynchronously-delivered GC

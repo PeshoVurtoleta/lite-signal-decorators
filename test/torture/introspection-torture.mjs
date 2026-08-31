@@ -19,31 +19,42 @@
 //     reclaimed); minors are reported honestly against the walk control.
 //
 //   A4 retention -- 1e5 construct -> snapshotOf -> disposeReactive cycles under
-//     a lite-leak tracker: tracker.size() === 0 after settle (held-value-safe),
-//     0 findings, 0 warnings; the default registry's F-0 floor returns to its
-//     pre-loop baseline; and a KEPT snapshot object holds NO box reference (its
-//     values are plain accessor reads -- none is a live signal box).
+//     a lite-leak tracker, the AUTHORITY being FINALIZATION: each disposed
+//     instance is tracked OUTSIDE any owner with a shared NOOP cleanup + numeric
+//     tag (held-value-safe), NEVER untracked, so after a HARD settle the residual
+//     tracker.size() <= RES = max(16, RET_CYCLES/1000); the default registry's
+//     F-0 floor returns to its pre-loop baseline (the INDEPENDENT node oracle);
+//     and a KEPT snapshot object holds NO box reference (its values are plain
+//     accessor reads -- none is a live signal box). (An earlier version tracked
+//     from inside an effect and untracked on stop() -- VARIANT-2 VACUOUS: stop()
+//     drove size() to 0 by construction. Fixed here. S10-A5 has the same fix.)
 //
 // TORTURE_BREAK=introspection-torture makes the WALK lane allocate a 1024-slot
 // array per walk: the control-relative maxMinor gate is what catches it, and
-// the lane exits non-zero (the --controls self-test).
+// the lane exits non-zero (the --controls self-test). TORTURE_LEAK=1 pins every
+// disposed A4/S10-A5 instance in a module sink so it can NEVER finalize ->
+// residual ~= the tracked count -> the finalization gates trip RED (the node
+// oracles stay green: the instances are still disposed).
 //
 // ASCII-only.
 
-import { effect, stats } from "@zakkster/lite-signal";
-import {
-    createLeakTracker,
-    createOwnerCascadeOrphanKernel,
-    createObserverOrphanKernel,
-} from "@zakkster/lite-leak";
+import { stats } from "@zakkster/lite-signal";
+import { createLeakTracker } from "@zakkster/lite-leak";
 import * as pkg from "../../SignalDecorators.js";
 import { buildClass } from "../shared/mock-emitter.mjs";
 import {
-    RUN, check, breakActive, settle, pass,
+    RUN, check, breakActive, pass,
     conservationBaseline, assertConserved, gcGate, dieInfra,
+    retainLeak, residualCeiling, settleHard,
 } from "./helpers/harness.mjs";
 
 const NAME = "introspection-torture";
+
+// RED control (TORTURE_LEAK=1): pin every disposed retention instance in this
+// module sink so it can NEVER finalize -> residual ~= the tracked count. Shared
+// by A4 and S10-A5. Read post-settle in each lane to defeat V8 liveness elision.
+const RETAIN = retainLeak();
+const __leakSink = [];
 
 if (typeof globalThis.gc !== "function") {
     dieInfra("introspection-torture requires node --expose-gc (forced-GC brackets are the measurement)");
@@ -241,46 +252,36 @@ let live = 0, findingsN = 0, warnsN = 0;
 
 {
     const RET_CYCLES = 100000;           // 1e5, the A4 lane size
-    const LEAK_EVERY = 20000;            // BREAK cadence (dead under the walk-break flag)
+    const RES = residualCeiling(RET_CYCLES);   // finalization residual ceiling (100)
 
-    const leaks = [];
     const warns = [];
+    // PLAIN tracker: no kernels, no onLeak (finalization is the release path).
     const tracker = createLeakTracker({
         name: NAME,
-        onLeak: (r) => leaks.push(r.kind + ":" + String(r.tag)),
         onWarning: (w) => warns.push(w.kind + ":" + w.reason),
     });
-    tracker.registerKernel(createOwnerCascadeOrphanKernel());
-    tracker.registerKernel(createObserverOrphanKernel());
 
     // Held-value-safe: `release` captures nothing, the tag is a detached primitive.
     function release() {}
-    const AUDIT = { audit: true };
-    const doBreak = breakActive(NAME);
 
     const preLoop = { activeNodes: stats().activeNodes };
 
     let keptSnap = null;
-    const leakedVms = [];
-    const leakedStops = [];
 
     let rsink = 0;
     for (let i = 0; i < RET_CYCLES; i++) {
         RUN.op = i;
         const inst = new Intro();
         const tag = i & 255;
-        const stop = effect(function () { tracker.track(inst, release, tag, AUDIT); });
         const snap = pkg.snapshotOf(inst);
         rsink = (rsink + Object.keys(snap).length) | 0;
         if (i === 0) keptSnap = snap;    // keep ONE snapshot from a to-be-disposed instance
 
-        if (doBreak && (i % LEAK_EVERY === 0)) {
-            leakedVms.push(inst);        // retained -> off the tracker floor
-            leakedStops.push(stop);
-        } else {
-            pkg.disposeReactive(inst);
-            stop();
-        }
+        pkg.disposeReactive(inst);
+        // AUTHORITY: track OUTSIDE any owner, after disposal -> lite-leak arms no
+        // auto-untrack; finalization is the sole release path. Never untracked.
+        tracker.track(inst, release, tag);
+        if (RETAIN) __leakSink.push(inst);   // RED: pin -> never finalizes
     }
     if (rsink === -1) console.log("unreachable");
     RUN.op = -1;
@@ -295,9 +296,10 @@ let live = 0, findingsN = 0, warnsN = 0;
         check(!looksLikeBox, () => "A4: kept snapshot value for " + String(k) + " is a live box -- snapshot retained reactivity");
     }
 
-    await settle();
-    globalThis.gc();
-    await settle();
+    await settleHard(() => tracker.size(), RES);
+    // Keep the RED sink live ACROSS the settle (V8 liveness-elides a module array
+    // written-but-never-read after the loop, masking the pin).
+    if (__leakSink.length === -1) console.log("unreachable");
 
     live = tracker.size();
     findingsN = tracker.audit().length;
@@ -305,13 +307,13 @@ let live = 0, findingsN = 0, warnsN = 0;
 
     check(warnsN === 0, () => "A4: kernel warnings emitted: " + warns.join(","));
     check(findingsN === 0, () => "A4: audit findings emitted");
-    check(leaks.length === 0, () => "A4: leak callbacks fired: " + leaks.join(","));
     check(
-        live === 0,
-        () => "A4: tracker retained " + live + " handle(s) after settle -- an instance outlived its owner",
+        live <= RES,
+        () => "A4: AUTHORITY finalization residual size()=" + live + " > " + RES +
+            " -- an instance outlived its disposal",
     );
 
-    // F-0: the default registry returns to its pre-loop baseline.
+    // F-0: the default registry returns to its pre-loop baseline (INDEPENDENT oracle).
     check(
         stats().activeNodes === preLoop.activeNodes,
         () => "A4: activeNodes " + stats().activeNodes + " != pre-loop baseline " + preLoop.activeNodes,
@@ -389,20 +391,17 @@ let cycLive = 0, cycFindings = 0, cycWarns = 0;
 
 {
     const CYCLES = 1000;                 // 1e3, the S10-A5 lane size
+    const RES = residualCeiling(CYCLES); // finalization residual ceiling (16)
 
-    const leaks = [];
     const warns = [];
+    // PLAIN tracker: no kernels, no onLeak (finalization is the release path).
     const tracker = createLeakTracker({
         name: NAME + "-cost",
-        onLeak: (r) => leaks.push(r.kind + ":" + String(r.tag)),
         onWarning: (w) => warns.push(w.kind + ":" + w.reason),
     });
-    tracker.registerKernel(createOwnerCascadeOrphanKernel());
-    tracker.registerKernel(createObserverOrphanKernel());
 
     // Held-value-safe: release captures nothing, the tag is a detached primitive.
     function release() {}
-    const AUDIT = { audit: true };
 
     const preLoop = { activeNodes: stats().activeNodes, poolGrowths: stats().poolGrowths };
 
@@ -411,7 +410,6 @@ let cycLive = 0, cycFindings = 0, cycWarns = 0;
         RUN.op = i;
         const inst = new Intro();                // wire
         const tag = i & 255;
-        const stop = effect(function () { tracker.track(inst, release, tag, AUDIT); });
         void inst.d0; void inst.d1;
         msink = (msink + pkg.costOfInstance(inst).nodes) | 0;   // measure (live)
         check(
@@ -422,14 +420,16 @@ let cycLive = 0, cycFindings = 0, cycWarns = 0;
         void inst.d0; void inst.d1;
         msink = (msink + pkg.costOfInstance(inst).nodes) | 0;   // measure again (revived)
         pkg.disposeReactive(inst);                // dispose
-        stop();
+        // AUTHORITY: track OUTSIDE any owner, after disposal; finalization is the
+        // sole release path. Never untracked.
+        tracker.track(inst, release, tag);
+        if (RETAIN) __leakSink.push(inst);        // RED: pin -> never finalizes
     }
     if (msink === -1) console.log("unreachable");
     RUN.op = -1;
 
-    await settle();
-    globalThis.gc();
-    await settle();
+    await settleHard(() => tracker.size(), RES);
+    if (__leakSink.length === -1) console.log("unreachable");   // keep RED sink live across settle
 
     cycLive = tracker.size();
     cycFindings = tracker.audit().length;
@@ -437,8 +437,11 @@ let cycLive = 0, cycFindings = 0, cycWarns = 0;
 
     check(cycWarns === 0, () => "S10-A5: kernel warnings emitted: " + warns.join(","));
     check(cycFindings === 0, () => "S10-A5: audit findings emitted");
-    check(leaks.length === 0, () => "S10-A5: leak callbacks fired: " + leaks.join(","));
-    check(cycLive === 0, () => "S10-A5: tracker retained " + cycLive + " handle(s) -- an instance outlived its owner");
+    check(
+        cycLive <= RES,
+        () => "S10-A5: AUTHORITY finalization residual size()=" + cycLive + " > " + RES +
+            " -- an instance outlived its disposal",
+    );
     check(
         stats().activeNodes === preLoop.activeNodes,
         () => "S10-A5: activeNodes " + stats().activeNodes + " != pre-loop baseline " + preLoop.activeNodes,
@@ -461,11 +464,11 @@ process.stdout.write(
     " | T11 snapshot=1e5 gc major=" + snapSummary.gc.major + " minor=" + snapMinor +
     " maxMs=" + snapSummary.gc.maxMs.toFixed(2) +
     " bytes/op=" + snapBytesPerOp.toFixed(1) + " (allocates by design, not gated)" +
-    " | A4 leak size=" + live + "/0 findings=" + findingsN + " warnings=" + warnsN +
+    " | A4 residual size=" + live + "/" + residualCeiling(100000) + " findings=" + findingsN + " warnings=" + warnsN +
     " | S10-A4 cost=1e4 gc major=" + costSummary.gc.major + " minor=" + costMinor +
     " (ctl=" + costCtlMinor + ") maxMs=" + costSummary.gc.maxMs.toFixed(2) +
     " bytes/op=" + costBytesPerOp.toFixed(1) + " (allocates by design, not gated)" +
-    " | S10-A5 cycles=1e3 leak size=" + cycLive + "/0 findings=" + cycFindings + " warnings=" + cycWarns + "\n",
+    " | S10-A5 cycles=1e3 residual size=" + cycLive + "/" + residualCeiling(1000) + " findings=" + cycFindings + " warnings=" + cycWarns + "\n",
 );
 
 pass(NAME);

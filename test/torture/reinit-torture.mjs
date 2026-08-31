@@ -14,12 +14,18 @@
 //     and 8N -- a real leak holds its per-cycle byte figure, fixed forced-GC
 //     endpoint noise amortizes toward zero).
 //   S6-A2 (retention) -- over the SAME 4096-cycle budget at N=512 live
-//     instances tracked by lite-leak: tracker.size() === 0 after settle
-//     (held-value-safe: neither `release` nor the tag closes over the
-//     instance), 0 findings, 0 warnings; the F-0 pool floor (activeNodes at
-//     its pre-cycle baseline, poolGrowths delta 0, ledger balanced) holds
-//     throughout; and a direct measurement that a PARKED instance holds ZERO
-//     engine nodes (activeNodes delta across releaseReactive == -(P+D+E+1)).
+//     instances tracked by lite-leak, the AUTHORITY is FINALIZATION: each
+//     instance is tracked OUTSIDE any owner with a shared NOOP cleanup + numeric
+//     tag (held-value-safe), NEVER untracked, and its pool-array scaffolding ref
+//     is cleared at teardown, so the tracker holds it only WEAKLY. After a HARD
+//     settle the finalization residual tracker.size() <= RES = max(16, N/1000);
+//     an instance really reclaimed on dispose is collected, one that leaked is
+//     not. The F-0 pool floor (activeNodes at its pre-cycle baseline, poolGrowths
+//     delta 0, ledger balanced) holds throughout -- the INDEPENDENT node oracle
+//     -- and a direct measurement shows a PARKED instance holds ZERO engine nodes
+//     (activeNodes delta across releaseReactive == -(P+D+E+1)).
+//     (An earlier version tracked from inside an effect and untracked on stop() --
+//     VARIANT-2 VACUOUS: stop() drove size() to 0 by construction. Fixed here.)
 //   S6-A3 (the nine-transition lattice) -- all nine states pinned with
 //     message-thunk assertions: live->park->reinit->live (values reset,
 //     initials override honored), live->dispose (unchanged from 1.0.0),
@@ -31,24 +37,24 @@
 //
 // TORTURE_BREAK=reinit-torture leaks one UN-PARKED instance every 1024 cycles
 // during the S6-A2 retention churn (churn-soak.mjs:156 pattern): a fresh
-// instance is constructed, tracked, and retained forever -- never released,
-// never disposed. Its 8 live nodes stay off the pool floor permanently, so
-// the very next F-0 checkpoint (every 256 cycles) fails, and the tracker's
-// final size()===0 gate fails too. The control MUST exit non-zero.
+// instance is constructed and retained forever -- never released, never disposed.
+// Its 8 live nodes stay off the pool floor permanently, so the very next F-0
+// checkpoint (every 256 cycles) fails. The control MUST exit non-zero.
+//
+// TORTURE_LEAK=1 pins every disposed pool instance in a module sink so it can
+// NEVER finalize -> residual ~= N -> the S6-A2 finalization gate trips RED
+// (the engine-node oracles stay green: the instances are still disposed).
 //
 // ASCII-only.
 
-import { effect, stats, createRegistry } from "@zakkster/lite-signal";
-import {
-    createLeakTracker,
-    createOwnerCascadeOrphanKernel,
-    createObserverOrphanKernel,
-} from "@zakkster/lite-leak";
+import { stats, createRegistry } from "@zakkster/lite-signal";
+import { createLeakTracker } from "@zakkster/lite-leak";
 import * as pkg from "../../SignalDecorators.js";
 import { buildClass } from "../shared/mock-emitter.mjs";
 import {
-    RUN, check, breakActive, randInt, settle, pass,
+    RUN, check, breakActive, randInt, pass,
     conservationBaseline, assertConserved, gcGate, dieInfra,
+    retainLeak, residualCeiling, settleHard,
 } from "./helpers/harness.mjs";
 
 const NAME = "reinit-torture";
@@ -199,6 +205,9 @@ const SCENARIO_BASE = conservationBaseline();
     const LEAK_EVERY = 1024;          // BREAK cadence
     const CHECK_MASK = 255;           // F-0 checkpoint every 256 cycles
     const EXPECTED_NODES = POOL_N * NODES_PER_INSTANCE;   // 512 x 8 == 4096
+    const RES = residualCeiling(POOL_N);                  // finalization residual ceiling
+    const RETAIN = retainLeak();      // RED control: pin every disposed instance
+    const __leakSink = [];
 
     // A DEDICATED registry (fleet-soak.mjs pattern): 512 live instances x 8
     // nodes == 4096 exceeds the default registry's 1024-node ceiling, so F-0
@@ -211,27 +220,26 @@ const SCENARIO_BASE = conservationBaseline();
         members: churnMembers(),
     });
 
-    const leaks = [];
     const warns = [];
+    // PLAIN tracker: no kernels, no onLeak (finalization is the release path, so a
+    // held-but-uncollected object must not be flagged and onLeak fires on
+    // collection). onWarning stays -- a warning is a real finding.
     const tracker = createLeakTracker({
         name: NAME,
-        onLeak: (r) => leaks.push(r.kind + ":" + String(r.tag)),
         onWarning: (w) => warns.push(w.kind + ":" + w.reason),
     });
-    tracker.registerKernel(createOwnerCascadeOrphanKernel());
-    tracker.registerKernel(createObserverOrphanKernel());
 
-    // Held-value-safe cleanup + audit options (leak-torture.mjs pattern):
-    // `release` captures nothing, the tag is a detached primitive.
+    // Held-value-safe cleanup: `release` captures nothing, the tag is a detached
+    // primitive.
     function release() {}
-    const AUDIT = { audit: true };
 
     const pool = new Array(POOL_N);
-    const poolStops = new Array(POOL_N);
     for (let i = 0; i < POOL_N; i++) {
         const inst = new Churn();
-        const tag = i & 255;
-        poolStops[i] = effect(function () { tracker.track(inst, release, tag, AUDIT); });
+        // AUTHORITY: track OUTSIDE any owner (module-scope loop -> getOwner()
+        // undefined) so lite-leak arms NO auto-untrack; finalization is the sole
+        // release path. Never untracked.
+        tracker.track(inst, release, i & 255);
         pool[i] = inst;
     }
 
@@ -249,8 +257,9 @@ const SCENARIO_BASE = conservationBaseline();
     const poolBase = { activeNodes: reg.stats().activeNodes, poolGrowths: reg.stats().poolGrowths };
 
     // Control retention: BREAK leaks (retained forever, never parked/disposed).
+    // Its 8 live nodes stay off the pool floor -> the F-0 checkpoint (the
+    // independent node oracle) catches it.
     const leakedVms = [];
-    const leakedStops = [];
 
     let rsink = 0;
     for (let i = 0; i < RETENTION_CYCLES; i++) {
@@ -259,9 +268,8 @@ const SCENARIO_BASE = conservationBaseline();
 
         if (leak) {
             const extra = new Churn();
-            const tag = 0xdead & 0xff;
-            leakedStops.push(effect(function () { tracker.track(extra, release, tag, AUDIT); }));
-            leakedVms.push(extra);          // retained -> off the pool floor, off the tracker
+            extra.s0 = 1;                   // wire + touch
+            leakedVms.push(extra);          // retained -> 8 live nodes off the pool floor
         } else {
             const idx = randInt(POOL_N);
             const inst = pool[idx];
@@ -331,13 +339,16 @@ const SCENARIO_BASE = conservationBaseline();
     );
 
     // Final teardown: dispose the whole pool (every instance is live at this
-    // point) and stop every tracking effect -> untrack fires -> size() falls.
+    // point) and CLEAR its scaffolding ref, so a properly-disposed instance's
+    // only strong ref is the tracker's WeakRef -> it becomes collectable and the
+    // finalization residual falls. The tracker is NEVER untracked.
     for (let i = 0; i < POOL_N; i++) {
         pkg.disposeReactive(pool[i]);
-        poolStops[i]();
+        if (RETAIN) __leakSink.push(pool[i]);   // RED: pin the disposed object -> never finalizes
+        pool[i] = null;                          // clear scaffolding
     }
-    // Under BREAK, leakedStops/leakedVms are deliberately left un-stopped and
-    // un-disposed -- that is the sabotage under test.
+    // Under BREAK, leakedVms is deliberately left un-disposed -- that is the
+    // sabotage under test (caught by the F-0 checkpoint above).
 
     // The dedicated registry is back to its pre-fleet baseline (activeNodes 0)
     // on a clean (non-BREAK) run; a BREAK run leaves the leaked instances'
@@ -350,16 +361,19 @@ const SCENARIO_BASE = conservationBaseline();
         );
     }
 
-    await settle();
-    globalThis.gc();
-    await settle();
+    await settleHard(() => tracker.size(), RES);
+    // Keep the RED sink + leaked set live ACROSS the settle (a module array
+    // written-but-never-read after the loop is liveness-elided by V8, masking the
+    // pin). This read forces both to survive every gc() round above.
+    if (__leakSink.length === -1 || leakedVms.length === -1) console.log("unreachable");
 
     const live = tracker.size();
     const findings = tracker.audit();
 
     process.stdout.write(
         "torture: reinit-torture S6-A2 pool=" + POOL_N + " cycles=" + RETENTION_CYCLES +
-        " | leak size=" + live + "/0 findings=" + findings.length + " warnings=" + warns.length +
+        " | AUTHORITY residual size=" + live + "/" + RES + " findings=" + findings.length +
+        " warnings=" + warns.length +
         " | parked-node-delta=" + (beforePark - afterPark) + " (expect " + NODES_PER_INSTANCE + ")\n",
     );
 
@@ -368,10 +382,10 @@ const SCENARIO_BASE = conservationBaseline();
         findings.length === 0,
         () => "S6-A2: audit findings: " + findings.map((f) => f.kind + ":" + f.reason).join(","),
     );
-    check(leaks.length === 0, () => "S6-A2: leak callbacks fired: " + leaks.join(","));
     check(
-        live === 0,
-        () => "S6-A2: tracker retained " + live + " handle(s) after settle -- an instance outlived its owner",
+        live <= RES,
+        () => "S6-A2: AUTHORITY finalization residual size()=" + live + " > " + RES +
+            " -- an instance outlived its disposal",
     );
 }
 

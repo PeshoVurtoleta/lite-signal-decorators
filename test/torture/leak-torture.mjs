@@ -9,41 +9,48 @@
 //   - registry-bound (buildClass + @reactiveHost({ registry }) on a bound
 //     createRegistry).
 //
-// Each instance is tracked with { audit: true } from inside a DEFAULT-registry
-// effect, so the tracker captures that effect as the owner and registers an
-// onCleanup(untrack) on it. The normal cycle then disposeReactive()s the
-// instance (its own detached tree is torn down) and stop()s the tracking
-// effect, whose cleanup untracks the handle -- reclamation is DETERMINISTIC,
-// not GC-dependent. A leaked instance (retained, tracking effect never
-// stopped) keeps its handle live: tracker.size() stays above zero.
+// AUTHORITY = FINALIZATION, not a counter trick. Each disposed instance is
+// tracked with a shared NOOP cleanup + a numeric tag OUTSIDE any active owner, so
+// lite-leak arms NO auto-untrack; the tracker holds it only WEAKLY and we never
+// untrack it. After the churn we settle HARD (>= gc()+macrotask passes) and gate
+// the finalization residual tracker.size() <= RES: an instance that was really
+// reclaimed is collected (size--), one that leaked is not.
 //
-// HELD-VALUE CONTRACT (suite law): neither `cleanup` (the shared module
-// noop `release`) nor `tag` (a detached primitive) closes over the tracked
-// instance, so finalization is never defeated and the tracker cannot report a
-// false-clean.
+// (An earlier version tracked from INSIDE a default-registry effect and untracked
+// on stop() -- a VARIANT-2 VACUOUS gate: stop() drove size() to 0 BY CONSTRUCTION
+// via the auto-registered onCleanup(untrack), so size()===0 held even if the
+// instance were retained forever. Fixed here to the finalization-authority
+// pattern -- a retention gate must FAIL on a retained object.)
 //
-// GATE after settle(): tracker.size() === 0, audit() finds nothing, zero
-// warnings, zero leak callbacks.
+// HELD-VALUE CONTRACT (suite law): neither `release` (the shared module noop) nor
+// `tag` (a detached primitive) closes over the tracked instance, so finalization
+// is never defeated and the tracker cannot report a false-clean. The tracker is
+// PLAIN (no kernels, no onLeak-into-a-checked-array): kernels flag held-but-
+// -uncollected objects and onLeak fires on COLLECTION -- both break the hold.
 //
-// TORTURE_BREAK=leak-torture leaks one instance every 512 cycles (skips both
-// its disposeReactive and its tracking-effect stop, retaining it): the
-// size()===0 gate is what must catch it.
+// GATE after settleHard(): tracker.size() <= RES, audit() finds nothing (no
+// kernels), zero warnings.
+//
+// TORTURE_BREAK=leak-torture leaks one instance every 64 cycles (retains it in a
+// module array, never disposed): residual climbs past RES and the gate trips
+// (the --controls self-test). TORTURE_LEAK=1 pins EVERY tracked instance in a
+// module sink -> residual ~= CYCLES -> the finalization gate trips RED directly.
 //
 // ASCII-only.
 
-import { effect, createRegistry } from "@zakkster/lite-signal";
-import {
-    createLeakTracker,
-    createOwnerCascadeOrphanKernel,
-    createObserverOrphanKernel,
-} from "@zakkster/lite-leak";
+import { createRegistry } from "@zakkster/lite-signal";
+import { createLeakTracker } from "@zakkster/lite-leak";
 import * as pkg from "../../SignalDecorators.js";
 import { buildClass } from "../shared/mock-emitter.mjs";
-import { RUN, check, breakActive, randInt, settle, pass } from "./helpers/harness.mjs";
+import {
+    RUN, check, breakActive, randInt, pass,
+    retainLeak, residualCeiling, settleHard,
+} from "./helpers/harness.mjs";
 
 const NAME = "leak-torture";
 const CYCLES = 4096;
-const LEAK_EVERY = 512;                          // BREAK cadence
+const LEAK_EVERY = 64;                            // BREAK cadence (> RES leaked)
+const RES = residualCeiling(CYCLES);              // finalization residual ceiling
 
 // --- shape builders (all constructed ONCE, reused across cycles) -------------
 
@@ -138,29 +145,29 @@ const BOUND = [
 
 // --- tracker + kernels --------------------------------------------------------
 
-const leaks = [];
 const warns = [];
 
+// PLAIN tracker: no kernels, no onLeak. Finalization is the release path, so a
+// held-but-uncollected object must NOT be flagged, and onLeak (which fires on
+// collection) is not a leak signal here. onWarning stays -- a warning is a real
+// finding.
 const tracker = createLeakTracker({
     name: NAME,
-    onLeak: (r) => leaks.push(r.kind + ":" + String(r.tag)),
     onWarning: (w) => warns.push(w.kind + ":" + w.reason),
 });
-// The reactive owner tree (cascade orphans) is the surface this package owns;
-// the observer kernel guards a surface the package does not patch, so it must
-// stay silent -- a warning from it would itself be a finding.
-tracker.registerKernel(createOwnerCascadeOrphanKernel());
-tracker.registerKernel(createObserverOrphanKernel());
 
-// Held-value-safe cleanup + audit options, allocated ONCE. `release` captures
-// nothing; the tag passed per-cycle is a primitive.
+// Held-value-safe cleanup, allocated ONCE. `release` captures nothing; the tag
+// passed per-cycle is a primitive.
 function release() {}
-const AUDIT = { audit: true };
 
-// Control retention: leaked instances and their never-stopped tracking effects
-// are parked here so they are neither disposed nor collected.
+// TORTURE_LEAK RED control: every tracked instance is pinned here so it can NEVER
+// finalize -> residual ~= CYCLES.
+const RETAIN = retainLeak();
+const __leakSink = [];
+
+// Control retention: leaked instances (TORTURE_BREAK) are parked here so they are
+// neither disposed nor collected -- residual stays above RES.
 const leakedVms = [];
-const leakedStops = [];
 
 // --- churn --------------------------------------------------------------------
 
@@ -181,36 +188,34 @@ for (let i = 0; i < CYCLES; i++) {
     sink = (sink + (Shape.__hasD ? vm.d0 : vm.s0)) | 0;   // exercise the hot accessor/derived
     const tag = i & 255;                                  // detached primitive; no capture
 
-    // Track from inside a default-registry effect -> owner captured, onCleanup
-    // registered. The effect body reads nothing reactive, so it runs once.
-    const stop = effect(function () {
-        tracker.track(vm, release, tag, AUDIT);
-    });
-
     if (leak) {
-        leakedVms.push(vm);       // retained -> handle stays live -> size > 0
-        leakedStops.push(stop);   // effect never stopped -> untrack never fires
+        leakedVms.push(vm);           // retained -> can never finalize -> size > RES
     } else {
-        pkg.disposeReactive(vm);  // tears down the instance's own reactive tree
-        stop();                   // effect cleanup -> untrack -> size decrements
+        pkg.disposeReactive(vm);      // tears down the instance's own reactive tree
     }
+    // AUTHORITY: track OUTSIDE any owner -> lite-leak arms no auto-untrack. A
+    // disposed vm's only strong ref is the tracker's WeakRef, so finalization is
+    // the sole release path; a leaked (retained) vm stays live.
+    tracker.track(vm, release, tag);
+    if (RETAIN) __leakSink.push(vm);  // RED: pin -> never finalizes.
 }
 if (sink === -1) console.log("unreachable");
 RUN.op = -1;
 
 // --- settle + gate ------------------------------------------------------------
 
-await settle();
-globalThis.gc?.();
-await settle();
+await settleHard(() => tracker.size(), RES);
+// Keep the RED sink live ACROSS the settle: a module array written-but-never-read
+// after the loop is otherwise liveness-elided by V8 and its contents collected,
+// masking the pin. This read forces it to survive every gc() round above.
+if (__leakSink.length === -1 || leakedVms.length === -1) console.log("unreachable");
 
 const live = tracker.size();
 const findings = tracker.audit();
 
 process.stdout.write(
-    "torture: leak-torture size=" + live + "/0 findings=" + findings.length +
-    " warnings=" + warns.length + " leaks=" + leaks.length +
-    " cycles=" + CYCLES + "\n",
+    "torture: leak-torture residual size=" + live + "/" + RES + " findings=" + findings.length +
+    " warnings=" + warns.length + " cycles=" + CYCLES + "\n",
 );
 
 check(warns.length === 0, () => "kernel warnings emitted: " + warns.join(","));
@@ -218,10 +223,10 @@ check(
     findings.length === 0,
     () => "audit findings: " + findings.map((f) => f.kind + ":" + f.reason).join(","),
 );
-check(leaks.length === 0, () => "leak callbacks fired: " + leaks.join(","));
 check(
-    live === 0,
-    () => "tracker retained " + live + " handle(s) after settle -- instance(s) outlived their owner",
+    live <= RES,
+    () => "AUTHORITY finalization residual size()=" + live + " > " + RES +
+        " -- instance(s) outlived their disposal",
 );
 
 pass(NAME);

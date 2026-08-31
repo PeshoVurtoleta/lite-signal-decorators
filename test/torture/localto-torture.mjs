@@ -20,10 +20,16 @@
 //     upstream returns to an equals-A value -> the read shows the STALE LOCAL X)
 //     asserted verbatim, plus the coarse-equals override-survival case.
 //   S8-A3 (pooled park/reinit retention) -- 4096 release/reinit cycles at N=512
-//     live instances tracked by lite-leak: tracker.size() === 0 after settle
-//     (held-value-safe), 0 findings, 0 warnings; the F-0 pool floor (activeNodes
-//     at baseline, poolGrowths delta 0, ledger balanced) holds throughout; and a
-//     direct probe that release frees EXACTLY P+L+D+E+1 nodes per instance.
+//     live instances tracked by lite-leak, the AUTHORITY being FINALIZATION: each
+//     instance is tracked OUTSIDE any owner with a shared NOOP cleanup + numeric
+//     tag (held-value-safe), NEVER untracked, and its pool-array scaffolding ref
+//     is cleared at teardown, so after a HARD settle the finalization residual
+//     tracker.size() <= RES = max(16, N/1000); the F-0 pool floor (activeNodes at
+//     baseline, poolGrowths delta 0, ledger balanced) holds throughout as the
+//     INDEPENDENT node oracle; and a direct probe shows release frees EXACTLY
+//     P+L+D+E+1 nodes per instance. (An earlier version tracked from inside an
+//     effect and untracked on stop() -- VARIANT-2 VACUOUS: stop() drove size()
+//     to 0 by construction. Fixed here to finalization authority.)
 //   S8-A4/A5 (the tracking shape) -- forEachSource on a derived reading ONE
 //     local yields EXACTLY 2 source descriptors (upstream edge + local box edge);
 //     1e5 localTo reads inside a recomputing derived emit 0 node-create and 0
@@ -35,21 +41,22 @@
 // zero-alloc control + 2 B floor and the S8-A2 headline check fails. The control
 // MUST exit non-zero.
 //
+// TORTURE_LEAK=1 pins every disposed pool instance (S8-A3) in a module sink so it
+// can NEVER finalize -> residual ~= N -> the S8-A3 finalization gate trips RED
+// (the engine-node oracles stay green: the instances are still disposed).
+//
 // ASCII-only.
 
 import {
-    effect, stats, createRegistry, forEachSource, onGraphMutation,
+    stats, createRegistry, forEachSource, onGraphMutation,
 } from "@zakkster/lite-signal";
-import {
-    createLeakTracker,
-    createOwnerCascadeOrphanKernel,
-    createObserverOrphanKernel,
-} from "@zakkster/lite-leak";
+import { createLeakTracker } from "@zakkster/lite-leak";
 import * as pkg from "../../SignalDecorators.js";
 import { buildClass } from "../shared/mock-emitter.mjs";
 import {
-    RUN, check, breakActive, randInt, settle, pass,
+    RUN, check, breakActive, randInt, pass,
     conservationBaseline, assertConserved, gcGate, dieInfra,
+    retainLeak, residualCeiling, settleHard,
 } from "./helpers/harness.mjs";
 
 const NAME = "localto-torture";
@@ -313,33 +320,34 @@ const SCENARIO_BASE = conservationBaseline();
     const LEAK_EVERY = 1024;          // BREAK cadence
     const CHECK_MASK = 255;           // F-0 checkpoint every 256 cycles
     const EXPECTED_NODES = POOL_N * NODES_PER_INSTANCE;   // 512 x 10 == 5120
+    const RES = residualCeiling(POOL_N);                  // finalization residual ceiling
+    const RETAIN = retainLeak();      // RED control: pin every disposed instance
+    const __leakSink = [];
 
     // A DEDICATED registry: 512 x 10 == 5120 exceeds the default registry's
     // 1024-node ceiling, so F-0 is asserted against THIS registry's own stats().
     const reg = createRegistry({ maxNodes: EXPECTED_NODES + 1024, onCapacityExceeded: "throw" });
     const Local = buildLocalClassOn("LocalPool", reg);
 
-    const leaks = [];
     const warns = [];
+    // PLAIN tracker: no kernels, no onLeak (finalization is the release path).
+    // onWarning stays -- a warning is a real finding.
     const tracker = createLeakTracker({
         name: NAME,
-        onLeak: (r) => leaks.push(r.kind + ":" + String(r.tag)),
         onWarning: (w) => warns.push(w.kind + ":" + w.reason),
     });
-    tracker.registerKernel(createOwnerCascadeOrphanKernel());
-    tracker.registerKernel(createObserverOrphanKernel());
 
-    // Held-value-safe cleanup + audit: `release` captures nothing, the tag is a
-    // detached primitive.
+    // Held-value-safe cleanup: `release` captures nothing, the tag is a detached
+    // primitive.
     function release() {}
-    const AUDIT = { audit: true };
 
     const pool = new Array(POOL_N);
-    const poolStops = new Array(POOL_N);
     for (let i = 0; i < POOL_N; i++) {
         const inst = new Local();
-        const tag = i & 255;
-        poolStops[i] = effect(function () { tracker.track(inst, release, tag, AUDIT); });
+        // AUTHORITY: track OUTSIDE any owner (module-scope loop -> getOwner()
+        // undefined) so lite-leak arms NO auto-untrack; finalization is the sole
+        // release path. Never untracked.
+        tracker.track(inst, release, i & 255);
         pool[i] = inst;
     }
 
@@ -353,8 +361,9 @@ const SCENARIO_BASE = conservationBaseline();
 
     const poolBase = { activeNodes: reg.stats().activeNodes, poolGrowths: reg.stats().poolGrowths };
 
+    // BREAK leaks: retained forever -> their live nodes stay off the pool floor,
+    // caught by the F-0 checkpoint (the independent node oracle).
     const leakedVms = [];
-    const leakedStops = [];
 
     let rsink = 0;
     for (let i = 0; i < RETENTION_CYCLES; i++) {
@@ -363,9 +372,8 @@ const SCENARIO_BASE = conservationBaseline();
 
         if (leak) {
             const extra = new Local();
-            const tag = 0xdead & 0xff;
-            leakedStops.push(effect(function () { tracker.track(extra, release, tag, AUDIT); }));
-            leakedVms.push(extra);          // retained -> off the pool floor, off the tracker
+            extra.s0 = 1;                   // wire + touch
+            leakedVms.push(extra);          // retained -> live nodes off the pool floor
         } else {
             const idx = randInt(POOL_N);
             const inst = pool[idx];
@@ -435,9 +443,10 @@ const SCENARIO_BASE = conservationBaseline();
 
     for (let i = 0; i < POOL_N; i++) {
         pkg.disposeReactive(pool[i]);
-        poolStops[i]();
+        if (RETAIN) __leakSink.push(pool[i]);   // RED: pin the disposed object -> never finalizes
+        pool[i] = null;                          // clear scaffolding -> only the tracker weak-refs it
     }
-    // Under BREAK, leakedStops/leakedVms are left un-stopped and un-disposed.
+    // Under BREAK, leakedVms is left un-disposed (caught by the F-0 checkpoint).
 
     {
         const s = reg.stats();
@@ -447,16 +456,18 @@ const SCENARIO_BASE = conservationBaseline();
         );
     }
 
-    await settle();
-    globalThis.gc();
-    await settle();
+    await settleHard(() => tracker.size(), RES);
+    // Keep the RED sink + leaked set live ACROSS the settle (V8 liveness-elides a
+    // module array written-but-never-read after the loop, masking the pin).
+    if (__leakSink.length === -1 || leakedVms.length === -1) console.log("unreachable");
 
     const live = tracker.size();
     const findings = tracker.audit();
 
     process.stdout.write(
         "torture: localto-torture S8-A3 pool=" + POOL_N + " cycles=" + RETENTION_CYCLES +
-        " | leak size=" + live + "/0 findings=" + findings.length + " warnings=" + warns.length +
+        " | AUTHORITY residual size=" + live + "/" + RES + " findings=" + findings.length +
+        " warnings=" + warns.length +
         " | release-node-delta=" + (beforePark - afterPark) + " (expect " + NODES_PER_INSTANCE + ")\n",
     );
 
@@ -465,10 +476,10 @@ const SCENARIO_BASE = conservationBaseline();
         findings.length === 0,
         () => "S8-A3: audit findings: " + findings.map((f) => f.kind + ":" + f.reason).join(","),
     );
-    check(leaks.length === 0, () => "S8-A3: leak callbacks fired: " + leaks.join(","));
     check(
-        live === 0,
-        () => "S8-A3: tracker retained " + live + " handle(s) after settle -- an instance outlived its owner",
+        live <= RES,
+        () => "S8-A3: AUTHORITY finalization residual size()=" + live + " > " + RES +
+            " -- an instance outlived its disposal",
     );
 }
 
